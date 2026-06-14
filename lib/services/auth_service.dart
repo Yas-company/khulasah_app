@@ -8,10 +8,12 @@ import 'package:flutter/material.dart';
 /// - Guest mode (continue without account)
 /// - Current user state
 /// - Sign out functionality
+/// - Auth state stream for reactive auth handling
 class AuthService {
   static AuthService? _instance;
   FirebaseAuth? _auth;
   bool _isInitialized = false;
+  bool _isGuestMode = false;
 
   AuthService._();
 
@@ -26,11 +28,30 @@ class AuthService {
   /// Current authenticated user (null if guest or not logged in)
   User? get currentUser => _auth?.currentUser;
 
-  /// Whether user is logged in (not a guest)
+  /// Whether user is logged in with Firebase (not a guest)
   bool get isLoggedIn => _auth?.currentUser != null;
 
-  /// Whether user is a guest (not logged in)
-  bool get isGuest => _auth?.currentUser == null;
+  /// Whether user is in guest mode (explicitly chose guest, not just logged out)
+  bool get isGuest => _isGuestMode && _auth?.currentUser == null;
+
+  /// Stream of auth state changes for reactive auth handling
+  Stream<User?> get authStateChanges =>
+      _auth?.authStateChanges() ?? Stream.value(null);
+
+  /// Enable guest mode (user explicitly chose to continue as guest)
+  void enableGuestMode() {
+    _isGuestMode = true;
+    debugPrint('[AuthService] Guest mode enabled manually');
+  }
+
+  /// Disable guest mode
+  void disableGuestMode() {
+    _isGuestMode = false;
+    debugPrint('[AuthService] Guest mode disabled');
+  }
+
+  /// Whether guest mode is active
+  bool get isGuestModeActive => _isGuestMode;
 
   /// User display name or email
   String get userDisplayName {
@@ -79,7 +100,8 @@ class AuthService {
         email: email.trim(),
         password: password,
       );
-      debugPrint('AuthService: User signed in successfully');
+      _isGuestMode = false;
+      debugPrint('[AuthService] User signed in successfully: ${_auth!.currentUser?.email}');
       return AuthResult.success();
     } on FirebaseAuthException catch (e) {
       return AuthResult.failure(_getArabicErrorMessage(e.code));
@@ -115,7 +137,8 @@ class AuthService {
         await credential.user?.updateDisplayName(displayName);
       }
 
-      debugPrint('AuthService: User registered successfully');
+      _isGuestMode = false;
+      debugPrint('[AuthService] User registered successfully: ${credential.user?.email}');
       return AuthResult.success();
     } on FirebaseAuthException catch (e) {
       return AuthResult.failure(_getArabicErrorMessage(e.code));
@@ -126,14 +149,17 @@ class AuthService {
   }
 
   /// Sign out the current user
+  /// This should ONLY be called when user explicitly taps logout button
   Future<void> signOut() async {
     if (!_isInitialized || _auth == null) return;
 
     try {
+      debugPrint('[AuthService] Manual logout initiated');
       await _auth!.signOut();
-      debugPrint('AuthService: User signed out');
+      _isGuestMode = false;
+      debugPrint('[AuthService] User signed out successfully');
     } catch (e) {
-      debugPrint('AuthService: Sign out error: $e');
+      debugPrint('[AuthService] Sign out error: $e');
     }
   }
 

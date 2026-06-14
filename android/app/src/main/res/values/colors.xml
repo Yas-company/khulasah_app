@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Khulasah brand colors -->
+    <color name="launch_background_color">#0F5132</color>
+    <color name="primary">#0F5132</color>
+    <color name="primary_dark">#004D25</color>
+</resources>

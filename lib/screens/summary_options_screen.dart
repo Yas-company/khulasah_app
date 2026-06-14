@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/selected_file_info.dart';
 import '../models/summary_options.dart';
+import '../services/pdf_text_service.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_text_styles.dart';
 import '../widgets/custom_button.dart';
@@ -19,9 +21,22 @@ class SummaryOptionsScreen extends StatefulWidget {
   State<SummaryOptionsScreen> createState() => _SummaryOptionsScreenState();
 }
 
-class _SummaryOptionsScreenState extends State<SummaryOptionsScreen> {
+class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
+    with SingleTickerProviderStateMixin {
   int _selectedOutputType = 0;
   int _selectedLength = 0;
+  bool _isProcessing = true;
+  bool _isExtracting = false;
+  late AnimationController _animationController;
+  late Animation<double> _fadeAnimation;
+
+  // Page range state
+  int _selectedPageRangeOption = 0; // 0 = all pages, 1 = custom range
+  late TextEditingController _fromPageController;
+  late TextEditingController _toPageController;
+  String? _pageRangeError;
+
+  final PdfTextService _pdfTextService = PdfTextService();
 
   final List<Map<String, dynamic>> _outputTypes = [
     {'icon': Icons.summarize, 'title': 'ملخص فقط'},
@@ -36,20 +51,165 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen> {
     {'icon': Icons.tune, 'title': 'مخصص'},
   ];
 
-  void _navigateToResult() {
-    final options = SummaryOptions(
-      outputTypeIndex: _selectedOutputType,
-      lengthIndex: _selectedLength,
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 500),
+      vsync: this,
+    );
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
     );
 
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ResultScreen(
-          fileInfo: widget.fileInfo,
-          options: options,
-        ),
-      ),
+    // Initialize page range controllers
+    _fromPageController = TextEditingController(text: '1');
+    _toPageController = TextEditingController(
+      text: widget.fileInfo.totalPages > 0 ? '${widget.fileInfo.totalPages}' : '1',
     );
+
+    // Log info (internal only)
+    _logInfo();
+
+    // Brief processing delay for smooth UX transition
+    Future.delayed(const Duration(milliseconds: 800), () {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+        });
+        _animationController.forward();
+      }
+    });
+  }
+
+  void _logInfo() {
+    debugPrint('[SummaryOptions] totalPages: ${widget.fileInfo.totalPages}');
+    debugPrint('[SummaryOptions] fileName: ${widget.fileInfo.fileName}');
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    _fromPageController.dispose();
+    _toPageController.dispose();
+    super.dispose();
+  }
+
+  /// Validate page range inputs
+  bool _validatePageRange() {
+    if (_selectedPageRangeOption == 0) {
+      // All pages selected - no validation needed
+      _pageRangeError = null;
+      return true;
+    }
+
+    final totalPages = widget.fileInfo.totalPages;
+    if (totalPages == 0) {
+      _pageRangeError = 'لم يتم تحديد عدد صفحات الملف';
+      return false;
+    }
+
+    final fromPage = int.tryParse(_fromPageController.text);
+    final toPage = int.tryParse(_toPageController.text);
+
+    if (fromPage == null || toPage == null) {
+      _pageRangeError = 'يرجى إدخال أرقام صحيحة';
+      return false;
+    }
+
+    if (fromPage < 1) {
+      _pageRangeError = 'رقم الصفحة يجب أن يكون 1 على الأقل';
+      return false;
+    }
+
+    if (toPage > totalPages) {
+      _pageRangeError = 'لا يمكن أن يتجاوز رقم الصفحة $totalPages';
+      return false;
+    }
+
+    if (fromPage > toPage) {
+      _pageRangeError = 'صفحة البداية يجب أن تكون أقل من صفحة النهاية';
+      return false;
+    }
+
+    _pageRangeError = null;
+    return true;
+  }
+
+  Future<void> _extractAndNavigate() async {
+    // Validate page range first
+    setState(() {
+      _validatePageRange();
+    });
+
+    if (_pageRangeError != null) {
+      return;
+    }
+
+    setState(() {
+      _isExtracting = true;
+    });
+
+    try {
+      // Determine page range
+      final useCustomRange = _selectedPageRangeOption == 1;
+      final fromPage = useCustomRange ? int.parse(_fromPageController.text) : null;
+      final toPage = useCustomRange ? int.parse(_toPageController.text) : null;
+
+      debugPrint('[SummaryOptions] Extracting pages: ${useCustomRange ? "$fromPage-$toPage" : "all"}');
+
+      // Extract text from selected page range
+      final result = await _pdfTextService.extractTextFromRange(
+        widget.fileInfo.filePath,
+        fromPage,
+        toPage,
+      );
+
+      if (!mounted) return;
+
+      // Update file info with extraction result and page range
+      final updatedFile = widget.fileInfo.copyWith(
+        extractedText: result.text,
+        textQuality: result.quality,
+        readableRatio: result.readableRatio,
+        errorMessage: result.errorMessage,
+        useCustomPageRange: useCustomRange,
+        selectedFromPage: fromPage ?? 1,
+        selectedToPage: toPage ?? widget.fileInfo.totalPages,
+      );
+
+      debugPrint('[SummaryOptions] Extracted ${updatedFile.extractedTextLength} chars');
+
+      final options = SummaryOptions(
+        outputTypeIndex: _selectedOutputType,
+        lengthIndex: _selectedLength,
+      );
+
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ResultScreen(
+            fileInfo: updatedFile,
+            options: options,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('[SummaryOptions] Extraction error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('حدث خطأ أثناء استخراج النص'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExtracting = false;
+        });
+      }
+    }
   }
 
   @override
@@ -63,7 +223,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen> {
           elevation: 0,
           leading: IconButton(
             icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: _isExtracting ? null : () => Navigator.of(context).pop(),
           ),
           title: Text(
             'خيارات التلخيص',
@@ -78,64 +238,19 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 16),
-                // Show selected file info
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: AppColors.primary.withValues(alpha: 0.2),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(
-                          Icons.description,
-                          color: AppColors.primary,
-                          size: 20,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              widget.fileInfo.fileName,
-                              style: AppTextStyles.titleMedium.copyWith(
-                                color: AppColors.primary,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            if (widget.fileInfo.fileSizeFormatted.isNotEmpty)
-                              Text(
-                                widget.fileInfo.fileSizeFormatted,
-                                style: AppTextStyles.bodySmall.copyWith(
-                                  color: AppColors.textSecondary,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // Extracted text preview
-                if (widget.fileInfo.hasExtractedText) ...[
-                  const SizedBox(height: 16),
-                  _buildExtractedTextPreview(),
-                ],
+                // File info card
+                _buildFileInfoCard(),
+                const SizedBox(height: 16),
+                // Status card (processing or ready)
+                _buildStatusCard(),
+                // Options sections
                 const SizedBox(height: 24),
+
+                // Page Range Section
+                _buildPageRangeSection(),
+                const SizedBox(height: 24),
+
+                // Output Type Section
                 Text(
                   'نوع المخرجات',
                   style: AppTextStyles.titleLarge,
@@ -149,15 +264,19 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen> {
                       icon: type['icon'] as IconData,
                       title: type['title'] as String,
                       isSelected: _selectedOutputType == index,
-                      onTap: () {
-                        setState(() {
-                          _selectedOutputType = index;
-                        });
-                      },
+                      onTap: _isExtracting
+                          ? null
+                          : () {
+                              setState(() {
+                                _selectedOutputType = index;
+                              });
+                            },
                     ),
                   );
                 }),
                 const SizedBox(height: 24),
+
+                // Length Section
                 Text(
                   'طول الملخص',
                   style: AppTextStyles.titleLarge,
@@ -171,18 +290,23 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen> {
                       icon: length['icon'] as IconData,
                       title: length['title'] as String,
                       isSelected: _selectedLength == index,
-                      onTap: () {
-                        setState(() {
-                          _selectedLength = index;
-                        });
-                      },
+                      onTap: _isExtracting
+                          ? null
+                          : () {
+                              setState(() {
+                                _selectedLength = index;
+                              });
+                            },
                     ),
                   );
                 }),
                 const SizedBox(height: 32),
+
+                // Generate button
                 CustomButton(
-                  text: 'إنشاء النتيجة',
-                  onPressed: _navigateToResult,
+                  text: _isExtracting ? 'جاري الاستخراج...' : 'إنشاء النتيجة',
+                  onPressed: _isExtracting ? null : _extractAndNavigate,
+                  isLoading: _isExtracting,
                 ),
                 const SizedBox(height: 32),
               ],
@@ -193,48 +317,392 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen> {
     );
   }
 
-  Widget _buildExtractedTextPreview() {
+  Widget _buildPageRangeSection() {
+    final totalPages = widget.fileInfo.totalPages;
+    final hasTotalPages = totalPages > 0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              'نطاق الصفحات',
+              style: AppTextStyles.titleLarge,
+            ),
+            if (hasTotalPages) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.secondary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '$totalPages صفحة',
+                  style: AppTextStyles.bodySmall.copyWith(
+                    color: AppColors.secondary,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // All pages option
+        OptionCard(
+          icon: Icons.select_all,
+          title: 'كل الصفحات',
+          subtitle: hasTotalPages ? 'من 1 إلى $totalPages' : null,
+          isSelected: _selectedPageRangeOption == 0,
+          onTap: _isExtracting
+              ? null
+              : () {
+                  setState(() {
+                    _selectedPageRangeOption = 0;
+                    _pageRangeError = null;
+                  });
+                },
+        ),
+        const SizedBox(height: 12),
+
+        // Custom range option
+        OptionCard(
+          icon: Icons.straighten,
+          title: 'صفحات محددة',
+          subtitle: 'اختر نطاق معين من الصفحات',
+          isSelected: _selectedPageRangeOption == 1,
+          onTap: _isExtracting
+              ? null
+              : () {
+                  setState(() {
+                    _selectedPageRangeOption = 1;
+                  });
+                },
+        ),
+
+        // Custom range inputs (only shown when custom range is selected)
+        if (_selectedPageRangeOption == 1) ...[
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildPageInputField(
+                        controller: _fromPageController,
+                        label: 'من صفحة',
+                        hint: '1',
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Icon(
+                        Icons.arrow_forward,
+                        color: AppColors.textSecondary,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: _buildPageInputField(
+                        controller: _toPageController,
+                        label: 'إلى صفحة',
+                        hint: hasTotalPages ? '$totalPages' : '10',
+                      ),
+                    ),
+                  ],
+                ),
+                if (_pageRangeError != null) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.error.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.error_outline,
+                          color: AppColors.error,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _pageRangeError!,
+                            style: AppTextStyles.bodySmall.copyWith(
+                              color: AppColors.error,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildPageInputField({
+    required TextEditingController controller,
+    required String label,
+    required String hint,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: AppTextStyles.bodySmall.copyWith(
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 6),
+        TextFormField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          textAlign: TextAlign.center,
+          enabled: !_isExtracting,
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            LengthLimitingTextInputFormatter(5),
+          ],
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: AppTextStyles.bodyMedium.copyWith(
+              color: AppColors.textSecondary.withValues(alpha: 0.5),
+            ),
+            filled: true,
+            fillColor: AppColors.background,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 12,
+            ),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: AppColors.border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: AppColors.border),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: AppColors.primary, width: 1.5),
+            ),
+          ),
+          style: AppTextStyles.titleMedium.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+          onChanged: (_) {
+            // Clear error when user types
+            if (_pageRangeError != null) {
+              setState(() {
+                _pageRangeError = null;
+              });
+            }
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFileInfoCard() {
+    final totalPages = widget.fileInfo.totalPages;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: AppColors.primary.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(
+              Icons.description,
+              color: AppColors.primary,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.fileInfo.fileName,
+                  style: AppTextStyles.titleMedium.copyWith(
+                    color: AppColors.primary,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Row(
+                  children: [
+                    if (widget.fileInfo.fileSizeFormatted.isNotEmpty)
+                      Text(
+                        widget.fileInfo.fileSizeFormatted,
+                        style: AppTextStyles.bodySmall.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    if (widget.fileInfo.fileSizeFormatted.isNotEmpty && totalPages > 0)
+                      Text(
+                        ' • ',
+                        style: AppTextStyles.bodySmall.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    if (totalPages > 0)
+                      Text(
+                        '$totalPages صفحة',
+                        style: AppTextStyles.bodySmall.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusCard() {
+    if (_isProcessing) {
+      return _buildProcessingCard();
+    }
+
+    return FadeTransition(
+      opacity: _fadeAnimation,
+      child: _buildReadyCard(),
+    );
+  }
+
+  Widget _buildProcessingCard() {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: AppColors.primary.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(
+          color: AppColors.primary.withValues(alpha: 0.15),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(
-                Icons.text_snippet,
-                size: 18,
-                color: AppColors.secondary,
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 12),
               Text(
-                'معاينة النص المستخرج',
+                'جاري تجهيز الملف...',
                 style: AppTextStyles.titleMedium.copyWith(
-                  color: AppColors.secondary,
+                  color: AppColors.primary,
                 ),
               ),
-              const Spacer(),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              backgroundColor: AppColors.primary.withValues(alpha: 0.15),
+              valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReadyCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppColors.primary.withValues(alpha: 0.25),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
               Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 4,
-                ),
+                width: 32,
+                height: 32,
                 decoration: BoxDecoration(
-                  color: AppColors.accent.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(6),
+                  color: AppColors.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                child: Text(
-                  widget.fileInfo.extractedTextLengthFormatted,
-                  style: AppTextStyles.bodySmall.copyWith(
-                    color: AppColors.accent,
-                    fontWeight: FontWeight.w500,
-                  ),
+                child: const Icon(
+                  Icons.check_circle,
+                  color: AppColors.primary,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'تم تجهيز الملف',
+                      style: AppTextStyles.titleMedium.copyWith(
+                        color: AppColors.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'الملف جاهز للتلخيص',
+                      style: AppTextStyles.bodySmall.copyWith(
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -242,19 +710,16 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen> {
           const SizedBox(height: 12),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: AppColors.background,
+              color: AppColors.primary.withValues(alpha: 0.06),
               borderRadius: BorderRadius.circular(8),
             ),
-            constraints: const BoxConstraints(maxHeight: 150),
-            child: SingleChildScrollView(
-              child: Text(
-                widget.fileInfo.extractedTextPreview,
-                style: AppTextStyles.bodySmall.copyWith(
-                  height: 1.6,
-                  color: AppColors.textSecondary,
-                ),
+            child: Text(
+              'اختر نطاق الصفحات والخيارات المناسبة ثم اضغط على إنشاء النتيجة.',
+              style: AppTextStyles.bodySmall.copyWith(
+                color: AppColors.textSecondary,
+                height: 1.4,
               ),
             ),
           ),

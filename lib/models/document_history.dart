@@ -14,6 +14,12 @@ class DocumentHistory {
   final List<Map<String, String>>? questionsAndAnswers;
   final DateTime createdAt;
 
+  /// Page range fields
+  final int totalPages;
+  final int fromPage;
+  final int toPage;
+  final String pageRangeLabel;
+
   DocumentHistory({
     this.id,
     required this.fileName,
@@ -24,6 +30,10 @@ class DocumentHistory {
     this.generatedSummary,
     this.questionsAndAnswers,
     required this.createdAt,
+    this.totalPages = 0,
+    this.fromPage = 1,
+    this.toPage = 0,
+    this.pageRangeLabel = 'كل الصفحات',
   });
 
   /// Create from Firestore document
@@ -48,6 +58,10 @@ class DocumentHistory {
       generatedSummary: data['generatedSummary'],
       questionsAndAnswers: qaList,
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      totalPages: data['totalPages'] ?? 0,
+      fromPage: data['fromPage'] ?? 1,
+      toPage: data['toPage'] ?? 0,
+      pageRangeLabel: data['pageRangeLabel'] ?? 'كل الصفحات',
     );
   }
 
@@ -62,6 +76,10 @@ class DocumentHistory {
       'generatedSummary': generatedSummary,
       'questionsAndAnswers': questionsAndAnswers,
       'createdAt': Timestamp.fromDate(createdAt),
+      'totalPages': totalPages,
+      'fromPage': fromPage,
+      'toPage': toPage,
+      'pageRangeLabel': pageRangeLabel,
     };
   }
 

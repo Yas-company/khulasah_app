@@ -160,6 +160,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
               width: 200,
               child: ElevatedButton(
                 onPressed: () {
+                  debugPrint('[HistoryScreen] Guest user tapping login button');
+                  _authService.disableGuestMode();
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(builder: (_) => const LoginScreen()),
                   );

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../config/app_config.dart';
 import '../models/generated_result.dart';
 import '../models/selected_file_info.dart';
 import '../models/summary_options.dart';
@@ -11,21 +12,18 @@ import 'firebase_functions_service.dart';
 /// Backend service that handles communication with AI/summarization services.
 ///
 /// This service uses a priority-based approach:
-/// 1. Try local Node.js backend (OpenRouter) first
-/// 2. If local backend fails, try Firebase Cloud Functions
+/// 1. Try backend (local in debug, Cloudflare Worker in release)
+/// 2. If backend fails, try Firebase Cloud Functions
 /// 3. If all backends fail, use local dummy generation
 ///
 /// SECURITY NOTES:
 /// - Never store API keys in Flutter/Dart code
 /// - All AI API calls go through backend services
-/// - The OpenRouter API key is stored in the local backend's .env file
+/// - Debug: Local Node.js backend with OpenRouter
+/// - Release: Cloudflare Worker with OpenRouter
 class BackendService {
   final FirebaseFunctionsService _firebaseService =
       FirebaseFunctionsService.instance;
-
-  /// Local backend URL for iOS Simulator
-  /// For physical device, use your computer's IP address
-  static const String _localBackendUrl = 'http://127.0.0.1:3000';
 
   /// Generates a result based on the selected options.
   ///
@@ -44,23 +42,33 @@ class BackendService {
     required SelectedFileInfo fileInfo,
     required SummaryOptions options,
   }) async {
-    // Validate input first
-    if (!fileInfo.hasExtractedText) {
+    // Debug log input state
+    debugPrint('[Backend] generateResult called');
+    debugPrint('[Backend] hasExtractedText: ${fileInfo.hasExtractedText}');
+    debugPrint('[Backend] extractedTextLength: ${fileInfo.extractedTextLength}');
+    debugPrint('[Backend] textQuality: ${fileInfo.textQuality.name}');
+    debugPrint('[Backend] outputTypeIndex: ${options.outputTypeIndex}');
+
+    // Always attempt generation - let AI handle any quality issues gracefully
+    // Only fail if we have absolutely no content at all
+    final textToSend = fileInfo.extractedText ?? '';
+    if (textToSend.isEmpty) {
+      debugPrint('[Backend] No text available - returning error');
       return GeneratedResult.error(
         'لا يوجد نص مستخرج من الملف للمعالجة',
       );
     }
 
-    // Try local Node.js backend first (OpenRouter)
-    debugPrint('[Backend] Trying local backend...');
+    // Try primary backend first (local in debug, Cloudflare Worker in release)
+    debugPrint('[Backend] Trying primary backend...');
     try {
-      final result = await _tryLocalBackend(fileInfo, options);
+      final result = await _tryPrimaryBackend(fileInfo, options);
       if (result != null) {
-        debugPrint('[Backend] Local backend success');
+        debugPrint('[Backend] Primary backend success');
         return result;
       }
     } catch (e) {
-      debugPrint('[Backend] Local backend failed: $e');
+      debugPrint('[Backend] Primary backend failed: $e');
     }
 
     // Try Firebase Cloud Functions second
@@ -82,10 +90,13 @@ class BackendService {
     return result;
   }
 
-  /// Attempts to generate result using local Node.js backend.
+  /// Attempts to generate result using the primary backend.
   ///
-  /// Returns null if local backend is not available or call fails.
-  Future<GeneratedResult?> _tryLocalBackend(
+  /// In debug mode: Local Node.js backend
+  /// In release mode: Cloudflare Worker
+  ///
+  /// Returns null if backend is not available or call fails.
+  Future<GeneratedResult?> _tryPrimaryBackend(
     SelectedFileInfo fileInfo,
     SummaryOptions options,
   ) async {
@@ -107,13 +118,15 @@ class BackendService {
     final outputType = outputTypeMap[options.outputTypeIndex] ?? 'summaryOnly';
     final summaryLength = lengthMap[options.lengthIndex] ?? 'medium';
 
-    debugPrint('[LocalBackend] Calling $_localBackendUrl/generate-result');
-    debugPrint('[LocalBackend] Output type: $outputType, Length: $summaryLength');
+    final backendUrl = AppConfig.backendUrl;
+    debugPrint('[Backend] Calling $backendUrl/generate-result');
+    debugPrint('[Backend] Output type: $outputType, Length: $summaryLength');
+    debugPrint('[Backend] Page range: ${fileInfo.pageRangeLabel}');
 
     try {
       final response = await http
           .post(
-            Uri.parse('$_localBackendUrl/generate-result'),
+            Uri.parse('$backendUrl/generate-result'),
             headers: {
               'Content-Type': 'application/json',
             },
@@ -122,17 +135,21 @@ class BackendService {
               'outputType': outputType,
               'summaryLength': summaryLength,
               'fileName': fileInfo.fileName,
+              'fromPage': fileInfo.actualFromPage,
+              'toPage': fileInfo.actualToPage,
+              'totalPages': fileInfo.totalPages,
+              'pageRangeLabel': fileInfo.pageRangeLabel,
             }),
           )
           .timeout(const Duration(seconds: 60));
 
-      debugPrint('[LocalBackend] Response status: ${response.statusCode}');
+      debugPrint('[Backend] Response status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
 
         if (data['success'] == true) {
-          debugPrint('[LocalBackend] Success - parsing result');
+          debugPrint('[Backend] Success - parsing result');
 
           // Parse Q&A if present
           List<QuestionAnswer>? qaList;
@@ -167,22 +184,22 @@ class BackendService {
             questionsAndAnswers: qaList,
           );
         } else {
-          debugPrint('[LocalBackend] Error in response: ${data['error']}');
+          debugPrint('[Backend] Error in response: ${data['error']}');
           return null;
         }
       } else {
-        debugPrint('[LocalBackend] HTTP error: ${response.statusCode}');
+        debugPrint('[Backend] HTTP error: ${response.statusCode}');
         return null;
       }
     } on SocketException catch (e) {
-      debugPrint('[LocalBackend] Connection error: $e');
-      debugPrint('[LocalBackend] Is the backend server running?');
+      debugPrint('[Backend] Connection error: $e');
+      debugPrint('[Backend] Is the backend server running?');
       return null;
     } on http.ClientException catch (e) {
-      debugPrint('[LocalBackend] Client error: $e');
+      debugPrint('[Backend] Client error: $e');
       return null;
     } catch (e) {
-      debugPrint('[LocalBackend] Unexpected error: $e');
+      debugPrint('[Backend] Unexpected error: $e');
       return null;
     }
   }

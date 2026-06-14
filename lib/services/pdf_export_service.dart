@@ -11,7 +11,7 @@ import '../models/generated_result.dart';
 /// Service for exporting results to PDF and sharing.
 ///
 /// Creates Arabic-friendly PDF documents with:
-/// - Arabic font support (Cairo)
+/// - Arabic font support (Amiri - static TTF)
 /// - RTL text direction
 /// - App branding
 /// - File information
@@ -20,9 +20,11 @@ import '../models/generated_result.dart';
 class PdfExportService {
   static PdfExportService? _instance;
 
-  // Cached fonts
+  // Cached fonts - using Amiri (static TTF fonts)
   pw.Font? _arabicFont;
   pw.Font? _arabicBoldFont;
+  bool _fontsLoaded = false;
+  String? _fontLoadError;
 
   PdfExportService._();
 
@@ -31,25 +33,48 @@ class PdfExportService {
     return _instance!;
   }
 
+  /// Clear cached fonts (useful for retry after error)
+  void clearFontCache() {
+    _arabicFont = null;
+    _arabicBoldFont = null;
+    _fontsLoaded = false;
+    _fontLoadError = null;
+    debugPrint('[PDF] Font cache cleared');
+  }
+
   /// Load Arabic fonts from assets
-  Future<void> _loadFonts() async {
-    if (_arabicFont != null && _arabicBoldFont != null) {
-      return; // Fonts already loaded
+  /// Uses Amiri font - a static TTF font that works with the pdf package
+  Future<bool> _loadFonts() async {
+    if (_fontsLoaded && _arabicFont != null && _arabicBoldFont != null) {
+      debugPrint('[PDF] Using cached fonts');
+      return true;
     }
 
     debugPrint('[PDF] Loading Arabic fonts...');
 
     try {
-      final regularData = await rootBundle.load('assets/fonts/Cairo-Regular.ttf');
-      final boldData = await rootBundle.load('assets/fonts/Cairo-Bold.ttf');
+      // Load regular font
+      debugPrint('[PDF] Loading Amiri-Regular.ttf...');
+      final regularData = await rootBundle.load('assets/fonts/Amiri-Regular.ttf');
+      debugPrint('[PDF] Regular font bytes length: ${regularData.lengthInBytes}');
 
+      // Load bold font
+      debugPrint('[PDF] Loading Amiri-Bold.ttf...');
+      final boldData = await rootBundle.load('assets/fonts/Amiri-Bold.ttf');
+      debugPrint('[PDF] Bold font bytes length: ${boldData.lengthInBytes}');
+
+      // Create font objects
       _arabicFont = pw.Font.ttf(regularData);
       _arabicBoldFont = pw.Font.ttf(boldData);
+      _fontsLoaded = true;
+      _fontLoadError = null;
 
       debugPrint('[PDF] Arabic fonts loaded successfully');
+      return true;
     } catch (e) {
+      _fontLoadError = e.toString();
       debugPrint('[PDF] Error loading fonts: $e');
-      rethrow;
+      return false;
     }
   }
 
@@ -61,14 +86,24 @@ class PdfExportService {
     required String outputType,
     required String summaryLength,
     required GeneratedResult result,
+    String pageRangeLabel = 'كل الصفحات',
   }) async {
     debugPrint('[PDF] Export started');
+    debugPrint('[PDF] File: $fileName');
+    debugPrint('[PDF] Output type: $outputType');
+    debugPrint('[PDF] Page range: $pageRangeLabel');
 
     try {
       // Load fonts first
-      await _loadFonts();
+      final fontsLoaded = await _loadFonts();
+      if (!fontsLoaded) {
+        debugPrint('[PDF] Export failed: Could not load fonts');
+        debugPrint('[PDF] Font error: $_fontLoadError');
+        return false;
+      }
 
       // Create PDF document
+      debugPrint('[PDF] Creating PDF document...');
       final pdf = pw.Document();
 
       // Add content pages
@@ -82,6 +117,7 @@ class PdfExportService {
             outputType: outputType,
             summaryLength: summaryLength,
             result: result,
+            pageRangeLabel: pageRangeLabel,
           ),
         ),
       );
@@ -93,12 +129,15 @@ class PdfExportService {
       final pdfPath = '${tempDir.path}/khulasah_${sanitizedFileName}_$timestamp.pdf';
 
       // Save PDF file
+      debugPrint('[PDF] Saving PDF to: $pdfPath');
       final file = File(pdfPath);
-      await file.writeAsBytes(await pdf.save());
+      final pdfBytes = await pdf.save();
+      await file.writeAsBytes(pdfBytes);
 
-      debugPrint('[PDF] File saved: $pdfPath');
+      debugPrint('[PDF] File saved: ${pdfBytes.length} bytes');
 
       // Share the file
+      debugPrint('[PDF] Opening share dialog...');
       final xFile = XFile(pdfPath);
       await Share.shareXFiles(
         [xFile],
@@ -108,10 +147,19 @@ class PdfExportService {
 
       debugPrint('[PDF] Export completed successfully');
       return true;
-    } catch (e) {
+    } catch (e, stackTrace) {
       debugPrint('[PDF] Export failed: $e');
+      debugPrint('[PDF] Stack trace: $stackTrace');
       return false;
     }
+  }
+
+  /// Get user-friendly error message
+  String getErrorMessage() {
+    if (_fontLoadError != null) {
+      return 'تعذر تحميل الخطوط العربية';
+    }
+    return 'تعذر إنشاء ملف PDF حاليًا، حاول مرة أخرى.';
   }
 
   List<pw.Widget> _buildContent({
@@ -119,6 +167,7 @@ class PdfExportService {
     required String outputType,
     required String summaryLength,
     required GeneratedResult result,
+    String pageRangeLabel = 'كل الصفحات',
   }) {
     final widgets = <pw.Widget>[];
 
@@ -173,6 +222,8 @@ class PdfExportService {
           crossAxisAlignment: pw.CrossAxisAlignment.end,
           children: [
             _buildInfoRow('اسم الملف:', fileName),
+            pw.SizedBox(height: 8),
+            _buildInfoRow('نطاق الصفحات:', pageRangeLabel),
             pw.SizedBox(height: 8),
             _buildInfoRow('نوع المخرجات:', _getOutputTypeLabel(outputType)),
             pw.SizedBox(height: 8),

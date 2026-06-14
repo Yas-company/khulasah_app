@@ -52,11 +52,22 @@ class _UploadPdfScreenState extends State<UploadPdfScreen> {
         return;
       }
 
+      // Get page count for the PDF
+      int totalPages = 0;
+      if (file.path != null) {
+        final pageCountResult = await _pdfTextService.getPageCount(file.path);
+        if (pageCountResult.success) {
+          totalPages = pageCountResult.pageCount;
+        }
+      }
+
       setState(() {
         _selectedFile = SelectedFileInfo(
           fileName: file.name,
           filePath: file.path,
           fileSize: file.size,
+          totalPages: totalPages,
+          selectedToPage: totalPages, // Default to all pages
         );
         _isLoading = false;
       });
@@ -82,19 +93,19 @@ class _UploadPdfScreenState extends State<UploadPdfScreen> {
 
       if (!mounted) return;
 
-      if (result.success) {
-        final updatedFile = _selectedFile!.copyWith(
-          extractedText: result.text,
-        );
+      // Always navigate to summary options screen with the result
+      final updatedFile = _selectedFile!.copyWith(
+        extractedText: result.text,
+        textQuality: result.quality,
+        readableRatio: result.readableRatio,
+        errorMessage: result.errorMessage,
+      );
 
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => SummaryOptionsScreen(fileInfo: updatedFile),
-          ),
-        );
-      } else {
-        _showErrorSnackBar(result.errorMessage ?? 'حدث خطأ غير معروف');
-      }
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => SummaryOptionsScreen(fileInfo: updatedFile),
+        ),
+      );
     } catch (e) {
       if (mounted) {
         _showErrorSnackBar('حدث خطأ أثناء استخراج النص');

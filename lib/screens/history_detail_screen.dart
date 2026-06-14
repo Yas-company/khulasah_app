@@ -74,6 +74,7 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
       outputType: widget.history.outputType,
       summaryLength: widget.history.summaryLength,
       result: result,
+      pageRangeLabel: widget.history.pageRangeLabel,
     );
 
     if (!mounted) return;
@@ -84,9 +85,10 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
     } else {
       debugPrint('PDF export from history failed');
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('حدث خطأ أثناء تصدير الملف'),
+        SnackBar(
+          content: Text(_pdfExportService.getErrorMessage()),
           backgroundColor: AppColors.error,
+          duration: const Duration(seconds: 4),
         ),
       );
     }
@@ -176,8 +178,14 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 8),
                     Text(
                       'حجم الملف: ${widget.history.fileSizeFormatted}',
+                      style: AppTextStyles.bodySmall,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'نطاق الصفحات: ${widget.history.pageRangeLabel}',
                       style: AppTextStyles.bodySmall,
                     ),
                     const SizedBox(height: 24),

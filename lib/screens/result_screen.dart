@@ -96,6 +96,10 @@ class _ResultScreenState extends State<ResultScreen> {
       extractedTextLength: widget.fileInfo.extractedText?.length ?? 0,
       outputType: outputTypeMap[widget.options.outputTypeIndex] ?? 'summary',
       summaryLength: lengthMap[widget.options.lengthIndex] ?? 'medium',
+      totalPages: widget.fileInfo.totalPages,
+      fromPage: widget.fileInfo.actualFromPage,
+      toPage: widget.fileInfo.actualToPage,
+      pageRangeLabel: widget.fileInfo.pageRangeLabel,
     );
 
     if (docId != null) {
@@ -141,6 +145,10 @@ class _ResultScreenState extends State<ResultScreen> {
       summaryLength: lengthMap[widget.options.lengthIndex] ?? 'medium',
       generatedSummary: _result!.summary,
       questionsAndAnswers: qaList,
+      totalPages: widget.fileInfo.totalPages,
+      fromPage: widget.fileInfo.actualFromPage,
+      toPage: widget.fileInfo.actualToPage,
+      pageRangeLabel: widget.fileInfo.pageRangeLabel,
     );
 
     if (!mounted) return;
@@ -184,6 +192,7 @@ class _ResultScreenState extends State<ResultScreen> {
       outputType: outputTypeMap[widget.options.outputTypeIndex] ?? 'summaryOnly',
       summaryLength: lengthMap[widget.options.lengthIndex] ?? 'medium',
       result: _result!,
+      pageRangeLabel: widget.fileInfo.pageRangeLabel,
     );
 
     if (!mounted) return;
@@ -194,9 +203,10 @@ class _ResultScreenState extends State<ResultScreen> {
     } else {
       debugPrint('[ResultScreen] PDF export failed');
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('حدث خطأ أثناء تصدير الملف'),
+        SnackBar(
+          content: Text(_pdfExportService.getErrorMessage()),
           backgroundColor: AppColors.error,
+          duration: const Duration(seconds: 4),
         ),
       );
     }
@@ -389,6 +399,11 @@ class _ResultScreenState extends State<ResultScreen> {
                           label: widget.options.lengthLabel,
                           color: AppColors.accent,
                         ),
+                        _buildInfoChip(
+                          icon: Icons.auto_stories,
+                          label: widget.fileInfo.pageRangeLabelShort,
+                          color: AppColors.textSecondary,
+                        ),
                       ],
                     ),
                     if (widget.fileInfo.fileSizeFormatted.isNotEmpty) ...[
@@ -398,6 +413,12 @@ class _ResultScreenState extends State<ResultScreen> {
                         style: AppTextStyles.bodySmall,
                       ),
                     ],
+                    // Page range info
+                    const SizedBox(height: 4),
+                    Text(
+                      'نطاق الصفحات: ${widget.fileInfo.pageRangeLabel}',
+                      style: AppTextStyles.bodySmall,
+                    ),
                     const SizedBox(height: 24),
                     const Divider(color: AppColors.border),
                     const SizedBox(height: 20),

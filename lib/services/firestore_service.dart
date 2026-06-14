@@ -63,6 +63,10 @@ class FirestoreService {
     required int extractedTextLength,
     required String outputType,
     required String summaryLength,
+    int totalPages = 0,
+    int fromPage = 1,
+    int toPage = 0,
+    String pageRangeLabel = 'كل الصفحات',
   }) async {
     // Only save for logged-in users
     if (_authService.isGuest) {
@@ -92,6 +96,10 @@ class FirestoreService {
         outputType: outputType,
         summaryLength: summaryLength,
         createdAt: DateTime.now(),
+        totalPages: totalPages,
+        fromPage: fromPage,
+        toPage: toPage,
+        pageRangeLabel: pageRangeLabel,
       );
 
       final docRef = await collection.add(history.toFirestore());
@@ -114,6 +122,10 @@ class FirestoreService {
     required String summaryLength,
     String? generatedSummary,
     List<Map<String, String>>? questionsAndAnswers,
+    int totalPages = 0,
+    int fromPage = 1,
+    int toPage = 0,
+    String pageRangeLabel = 'كل الصفحات',
   }) async {
     debugPrint('Save result started');
 
@@ -147,6 +159,10 @@ class FirestoreService {
         generatedSummary: generatedSummary,
         questionsAndAnswers: questionsAndAnswers,
         createdAt: DateTime.now(),
+        totalPages: totalPages,
+        fromPage: fromPage,
+        toPage: toPage,
+        pageRangeLabel: pageRangeLabel,
       );
 
       final docRef = await collection.add(history.toFirestore());

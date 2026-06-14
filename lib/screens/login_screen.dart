@@ -56,6 +56,15 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _navigateToHome() {
+    debugPrint('[LoginScreen] Navigating to HomeScreen after successful login');
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
+    );
+  }
+
+  void _continueAsGuest() {
+    debugPrint('[LoginScreen] User chose to continue as guest');
+    _authService.enableGuestMode();
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => const HomeScreen()),
     );
@@ -146,7 +155,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 16),
                   CustomButton(
                     text: 'المتابعة كضيف',
-                    onPressed: _navigateToHome,
+                    onPressed: _continueAsGuest,
                     isOutlined: true,
                   ),
                   const SizedBox(height: 24),
