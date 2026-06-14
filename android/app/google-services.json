@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "577628540410",
+    "project_id": "khulasah-prod",
+    "storage_bucket": "khulasah-prod.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:577628540410:android:53ed5518e7181ee1e2e843",
+        "android_client_info": {
+          "package_name": "com.example.khulasah_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBaADqcZxiKlPcgtTB6m9OBFULxhZuoRs8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
