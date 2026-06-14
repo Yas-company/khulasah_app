@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
+import '../services/app_feedback_service.dart';
 import '../services/auth_service.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_text_styles.dart';
 import '../widgets/app_logo.dart';
-import '../widgets/custom_button.dart';
+import '../widgets/premium_button.dart';
 import 'home_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -51,12 +52,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
     setState(() => _isLoading = false);
 
     if (result.success) {
+      await AppFeedbackService.instance.success();
       debugPrint('[RegisterScreen] Registration successful, navigating to HomeScreen');
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const HomeScreen()),
         (route) => false,
       );
     } else {
+      await AppFeedbackService.instance.error();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(result.errorMessage ?? 'حدث خطأ'),
@@ -183,9 +186,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     },
                   ),
                   const SizedBox(height: 32),
-                  CustomButton(
-                    text: _isLoading ? 'جاري إنشاء الحساب...' : 'إنشاء حساب',
-                    onPressed: _isLoading ? null : _register,
+                  PremiumButton(
+                    text: 'إنشاء حساب',
+                    onPressed: _register,
+                    isLoading: _isLoading,
+                    icon: Icons.person_add_rounded,
                   ),
                   const SizedBox(height: 24),
                   Row(

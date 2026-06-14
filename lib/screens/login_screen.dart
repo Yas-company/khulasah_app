@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
+import '../services/app_feedback_service.dart';
 import '../services/auth_service.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_text_styles.dart';
 import '../widgets/app_logo.dart';
-import '../widgets/custom_button.dart';
+import '../widgets/premium_button.dart';
 import 'home_screen.dart';
 import 'register_screen.dart';
 
@@ -44,8 +45,10 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = false);
 
     if (result.success) {
+      await AppFeedbackService.instance.success();
       _navigateToHome();
     } else {
+      await AppFeedbackService.instance.error();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(result.errorMessage ?? 'حدث خطأ'),
@@ -148,15 +151,18 @@ class _LoginScreenState extends State<LoginScreen> {
                     },
                   ),
                   const SizedBox(height: 32),
-                  CustomButton(
-                    text: _isLoading ? 'جاري تسجيل الدخول...' : 'تسجيل الدخول',
-                    onPressed: _isLoading ? null : _login,
+                  PremiumButton(
+                    text: 'تسجيل الدخول',
+                    onPressed: _login,
+                    isLoading: _isLoading,
+                    icon: Icons.login_rounded,
                   ),
                   const SizedBox(height: 16),
-                  CustomButton(
+                  PremiumButton(
                     text: 'المتابعة كضيف',
                     onPressed: _continueAsGuest,
                     isOutlined: true,
+                    icon: Icons.person_outline,
                   ),
                   const SizedBox(height: 24),
                   Row(

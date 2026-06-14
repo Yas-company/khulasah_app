@@ -1,6 +1,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'subscription_service.dart';
+
 /// Authentication service for handling user login, registration, and session.
 ///
 /// This service wraps Firebase Authentication and provides:
@@ -135,6 +137,17 @@ class AuthService {
       // Update display name if provided
       if (displayName != null && displayName.isNotEmpty) {
         await credential.user?.updateDisplayName(displayName);
+      }
+
+      // Create free subscription for new user
+      if (credential.user != null) {
+        try {
+          await SubscriptionService.instance.createFreePlanForNewUser(credential.user!.uid);
+          debugPrint('[AuthService] Free subscription created for new user');
+        } catch (e) {
+          debugPrint('[AuthService] Failed to create free subscription: $e');
+          // Don't fail registration if subscription creation fails
+        }
       }
 
       _isGuestMode = false;

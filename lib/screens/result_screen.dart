@@ -2,13 +2,16 @@ import 'package:flutter/material.dart';
 import '../models/generated_result.dart';
 import '../models/selected_file_info.dart';
 import '../models/summary_options.dart';
+import '../services/app_feedback_service.dart';
 import '../services/auth_service.dart';
 import '../services/backend_service.dart';
 import '../services/firestore_service.dart';
 import '../services/pdf_export_service.dart';
+import '../services/subscription_service.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_text_styles.dart';
-import '../widgets/custom_button.dart';
+import '../widgets/animated_widgets.dart';
+import '../widgets/premium_button.dart';
 import 'home_screen.dart';
 
 class ResultScreen extends StatefulWidget {
@@ -30,6 +33,7 @@ class _ResultScreenState extends State<ResultScreen> {
   final FirestoreService _firestoreService = FirestoreService.instance;
   final AuthService _authService = AuthService.instance;
   final PdfExportService _pdfExportService = PdfExportService.instance;
+  final SubscriptionService _subscriptionService = SubscriptionService.instance;
 
   bool _isLoading = true;
   bool _isSaving = false;
@@ -63,9 +67,16 @@ class _ResultScreenState extends State<ResultScreen> {
           _isLoading = false;
         });
 
+        // Trigger success feedback
+        await AppFeedbackService.instance.success();
+
+        // Increment usage counter for logged-in users
+        _incrementUsage();
+
         // Auto-save to history for logged-in users
         _autoSaveToHistory();
       } else {
+        await AppFeedbackService.instance.error();
         setState(() {
           _errorMessage = result.errorMessage ?? 'حدث خطأ غير معروف';
           _isLoading = false;
@@ -73,10 +84,28 @@ class _ResultScreenState extends State<ResultScreen> {
       }
     } catch (e) {
       if (!mounted) return;
+      await AppFeedbackService.instance.error();
       setState(() {
         _errorMessage = 'حدث خطأ أثناء الاتصال بالخدمة';
         _isLoading = false;
       });
+    }
+  }
+
+  /// Increment usage counter after successful generation
+  Future<void> _incrementUsage() async {
+    final uid = _authService.userId;
+    if (uid == null) {
+      debugPrint('[ResultScreen] Guest user - skipping usage increment');
+      return;
+    }
+
+    try {
+      await _subscriptionService.incrementUsageAfterSuccess(uid);
+      debugPrint('[ResultScreen] Usage incremented successfully');
+    } catch (e) {
+      debugPrint('[ResultScreen] Failed to increment usage: $e');
+      // Don't show error to user - usage tracking is not critical
     }
   }
 
@@ -156,6 +185,7 @@ class _ResultScreenState extends State<ResultScreen> {
 
     if (docId != null) {
       debugPrint('Save result success: $docId');
+      await AppFeedbackService.instance.success();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('تم حفظ النتيجة بنجاح'),
@@ -164,6 +194,7 @@ class _ResultScreenState extends State<ResultScreen> {
       );
     } else {
       debugPrint('Save result failed');
+      await AppFeedbackService.instance.error();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('حدث خطأ أثناء حفظ النتيجة'),
@@ -200,8 +231,10 @@ class _ResultScreenState extends State<ResultScreen> {
 
     if (success) {
       debugPrint('[ResultScreen] PDF export completed');
+      await AppFeedbackService.instance.success();
     } else {
       debugPrint('[ResultScreen] PDF export failed');
+      await AppFeedbackService.instance.error();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(_pdfExportService.getErrorMessage()),
@@ -246,48 +279,31 @@ class _ResultScreenState extends State<ResultScreen> {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 80,
-              height: 80,
-              decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.1),
-                shape: BoxShape.circle,
-              ),
-              child: const Center(
-                child: SizedBox(
-                  width: 40,
-                  height: 40,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 3,
-                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text(
-              'جاري إنشاء النتيجة...',
-              style: AppTextStyles.titleMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              widget.fileInfo.fileName,
-              style: AppTextStyles.bodySmall,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              widget.options.outputTypeLabel,
-              style: AppTextStyles.bodySmall.copyWith(
+        child: FadeSlideTransition(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              AnimatedLoadingIndicator(
+                message: 'جاري إنشاء النتيجة...',
                 color: AppColors.primary,
+                size: 56,
               ),
-              textAlign: TextAlign.center,
-            ),
-          ],
+              const SizedBox(height: 16),
+              Text(
+                widget.fileInfo.fileName,
+                style: AppTextStyles.bodySmall,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                widget.options.outputTypeLabel,
+                style: AppTextStyles.bodySmall.copyWith(
+                  color: AppColors.primary,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -328,13 +344,14 @@ class _ResultScreenState extends State<ResultScreen> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
-            CustomButton(
+            PremiumButton(
               text: 'إعادة المحاولة',
               onPressed: _generateResult,
               width: 200,
+              icon: Icons.refresh_rounded,
             ),
             const SizedBox(height: 12),
-            CustomButton(
+            PremiumButton(
               text: 'العودة للرئيسية',
               onPressed: () {
                 Navigator.of(context).pushAndRemoveUntil(
@@ -344,6 +361,7 @@ class _ResultScreenState extends State<ResultScreen> {
               },
               isOutlined: true,
               width: 200,
+              icon: Icons.home_rounded,
             ),
           ],
         ),
@@ -352,13 +370,14 @@ class _ResultScreenState extends State<ResultScreen> {
   }
 
   Widget _buildResultContent() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Column(
-        children: [
-          const SizedBox(height: 24),
-          Expanded(
-            child: Container(
+    return FadeSlideTransition(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          children: [
+            const SizedBox(height: 24),
+            Expanded(
+              child: Container(
               width: double.infinity,
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
@@ -489,7 +508,7 @@ class _ResultScreenState extends State<ResultScreen> {
             ],
           ),
           const SizedBox(height: 12),
-          CustomButton(
+          PremiumButton(
             text: 'العودة للرئيسية',
             onPressed: () {
               Navigator.of(context).pushAndRemoveUntil(
@@ -498,9 +517,11 @@ class _ResultScreenState extends State<ResultScreen> {
               );
             },
             isOutlined: true,
+            icon: Icons.home_rounded,
           ),
           const SizedBox(height: 32),
         ],
+      ),
       ),
     );
   }

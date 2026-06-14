@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
+import '../models/user_plan.dart';
+import '../services/app_feedback_service.dart';
 import '../services/auth_service.dart';
+import '../services/subscription_service.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_text_styles.dart';
+import '../widgets/animated_widgets.dart';
 import '../widgets/app_logo.dart';
 import 'upload_pdf_screen.dart';
 import 'history_screen.dart';
 import 'login_screen.dart';
+import 'plans_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -16,13 +21,35 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final AuthService _authService = AuthService.instance;
+  final SubscriptionService _subscriptionService = SubscriptionService.instance;
+  UserPlan? _currentPlan;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCurrentPlan();
+  }
+
+  Future<void> _loadCurrentPlan() async {
+    final uid = _authService.userId;
+    if (uid != null) {
+      final plan = await _subscriptionService.getCurrentPlan(uid);
+      if (mounted) {
+        setState(() {
+          _currentPlan = plan;
+        });
+      }
+    }
+  }
 
   Future<void> _logout() async {
     debugPrint('[HomeScreen] Manual logout button tapped');
+    await AppFeedbackService.instance.tap();
     await _authService.signOut();
 
     if (!mounted) return;
 
+    await AppFeedbackService.instance.success();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('تم تسجيل الخروج بنجاح'),
@@ -69,10 +96,23 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 16),
+
+                      // Plan Badge & Usage (only show when logged in)
+                      if (isLoggedIn && _currentPlan != null)
+                        FadeSlideTransition(
+                          delay: const Duration(milliseconds: 50),
+                          child: _buildPlanUsageCard(),
+                        ),
+
+                      if (isLoggedIn && _currentPlan != null)
+                        const SizedBox(height: 16),
 
                       // Hero Card
-                      _buildHeroCard(),
+                      FadeSlideTransition(
+                        delay: const Duration(milliseconds: 100),
+                        child: _buildHeroCard(),
+                      ),
 
                       const SizedBox(height: 28),
 
@@ -94,7 +134,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(height: 24),
 
                       // Bottom Info Note
-                      _buildInfoNote(),
+                      FadeSlideTransition(
+                        delay: const Duration(milliseconds: 350),
+                        child: _buildInfoNote(),
+                      ),
 
                       const SizedBox(height: 24),
                     ],
@@ -387,25 +430,37 @@ class _HomeScreenState extends State<HomeScreen> {
         Row(
           children: [
             Expanded(
-              child: _buildServiceCard(
-                icon: Icons.summarize_rounded,
-                title: 'تلخيص PDF',
-                description: 'ملخص سريع ومنظم',
-                color: AppColors.primary,
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const UploadPdfScreen()),
+              child: StaggeredListItem(
+                index: 0,
+                child: _buildServiceCard(
+                  icon: Icons.summarize_rounded,
+                  title: 'تلخيص PDF',
+                  description: 'ملخص سريع ومنظم',
+                  color: AppColors.primary,
+                  onTap: () {
+                    AppFeedbackService.instance.tap();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const UploadPdfScreen()),
+                    );
+                  },
                 ),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: _buildServiceCard(
-                icon: Icons.quiz_rounded,
-                title: 'سؤال وجواب',
-                description: 'أسئلة من محتوى الملف',
-                color: AppColors.secondary,
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const UploadPdfScreen()),
+              child: StaggeredListItem(
+                index: 1,
+                child: _buildServiceCard(
+                  icon: Icons.quiz_rounded,
+                  title: 'سؤال وجواب',
+                  description: 'أسئلة من محتوى الملف',
+                  color: AppColors.secondary,
+                  onTap: () {
+                    AppFeedbackService.instance.tap();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const UploadPdfScreen()),
+                    );
+                  },
                 ),
               ),
             ),
@@ -417,25 +472,37 @@ class _HomeScreenState extends State<HomeScreen> {
         Row(
           children: [
             Expanded(
-              child: _buildServiceCard(
-                icon: Icons.auto_awesome_rounded,
-                title: 'ملخص + أسئلة',
-                description: 'الملخص والأسئلة معًا',
-                color: AppColors.accent,
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const UploadPdfScreen()),
+              child: StaggeredListItem(
+                index: 2,
+                child: _buildServiceCard(
+                  icon: Icons.auto_awesome_rounded,
+                  title: 'ملخص + أسئلة',
+                  description: 'الملخص والأسئلة معًا',
+                  color: AppColors.accent,
+                  onTap: () {
+                    AppFeedbackService.instance.tap();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const UploadPdfScreen()),
+                    );
+                  },
                 ),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: _buildServiceCard(
-                icon: Icons.history_rounded,
-                title: 'السجل',
-                description: 'نتائجك السابقة',
-                color: const Color(0xFF6B7280),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const HistoryScreen()),
+              child: StaggeredListItem(
+                index: 3,
+                child: _buildServiceCard(
+                  icon: Icons.history_rounded,
+                  title: 'السجل',
+                  description: 'نتائجك السابقة',
+                  color: const Color(0xFF6B7280),
+                  onTap: () {
+                    AppFeedbackService.instance.tap();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const HistoryScreen()),
+                    );
+                  },
                 ),
               ),
             ),
@@ -554,5 +621,108 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildPlanUsageCard() {
+    final plan = _currentPlan!;
+
+    return InkWell(
+      onTap: () {
+        AppFeedbackService.instance.tap();
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const PlansScreen()),
+        );
+      },
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.03),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            // Plan Badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: _getPlanColor(plan.planId).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _getPlanIcon(plan.planId),
+                    size: 14,
+                    color: _getPlanColor(plan.planId),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    plan.planNameArabic,
+                    style: AppTextStyles.bodySmall.copyWith(
+                      color: _getPlanColor(plan.planId),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+
+            // Usage Text
+            Expanded(
+              child: Text(
+                plan.usageTextArabic,
+                style: AppTextStyles.bodySmall.copyWith(
+                  color: AppColors.textSecondary,
+                  fontSize: 11,
+                ),
+              ),
+            ),
+
+            // Arrow
+            Icon(
+              Icons.chevron_left,
+              size: 18,
+              color: AppColors.textSecondary.withValues(alpha: 0.5),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _getPlanColor(String planId) {
+    switch (planId) {
+      case 'basic':
+        return AppColors.primary;
+      case 'pro':
+        return AppColors.accent;
+      default:
+        return AppColors.textSecondary;
+    }
+  }
+
+  IconData _getPlanIcon(String planId) {
+    switch (planId) {
+      case 'basic':
+        return Icons.star_rounded;
+      case 'pro':
+        return Icons.workspace_premium;
+      default:
+        return Icons.card_giftcard_rounded;
+    }
   }
 }

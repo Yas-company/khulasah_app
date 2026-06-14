@@ -2,11 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/selected_file_info.dart';
 import '../models/summary_options.dart';
+import '../models/user_plan.dart';
+import '../services/app_feedback_service.dart';
+import '../services/auth_service.dart';
 import '../services/pdf_text_service.dart';
+import '../services/subscription_service.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_text_styles.dart';
-import '../widgets/custom_button.dart';
 import '../widgets/option_card.dart';
+import '../widgets/paywall_dialog.dart';
+import '../widgets/premium_button.dart';
 import 'result_screen.dart';
 
 class SummaryOptionsScreen extends StatefulWidget {
@@ -36,7 +41,12 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
   late TextEditingController _toPageController;
   String? _pageRangeError;
 
+  // Subscription state
+  UserPlan? _currentPlan;
+  String? _planLimitWarning;
+
   final PdfTextService _pdfTextService = PdfTextService();
+  final SubscriptionService _subscriptionService = SubscriptionService.instance;
 
   final List<Map<String, dynamic>> _outputTypes = [
     {'icon': Icons.summarize, 'title': 'ملخص فقط'},
@@ -71,6 +81,9 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     // Log info (internal only)
     _logInfo();
 
+    // Load current subscription plan
+    _loadCurrentPlan();
+
     // Brief processing delay for smooth UX transition
     Future.delayed(const Duration(milliseconds: 800), () {
       if (mounted) {
@@ -85,6 +98,80 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
   void _logInfo() {
     debugPrint('[SummaryOptions] totalPages: ${widget.fileInfo.totalPages}');
     debugPrint('[SummaryOptions] fileName: ${widget.fileInfo.fileName}');
+  }
+
+  Future<void> _loadCurrentPlan() async {
+    final uid = AuthService.instance.userId;
+    if (uid != null) {
+      final plan = await _subscriptionService.getCurrentPlan(uid);
+      if (mounted) {
+        setState(() {
+          _currentPlan = plan;
+        });
+        _checkPlanLimits();
+      }
+    }
+  }
+
+  void _checkPlanLimits() {
+    if (_currentPlan == null) return;
+
+    final selectedPageCount = _getSelectedPageCount();
+    final maxPages = _currentPlan!.maxPagesPerRequest;
+
+    debugPrint('[SummaryOptions] Plan: ${_currentPlan!.planId}');
+    debugPrint('[SummaryOptions] Selected pages: $selectedPageCount, Max allowed: $maxPages');
+
+    if (selectedPageCount > maxPages) {
+      setState(() {
+        _planLimitWarning = 'خطتك الحالية تسمح بتلخيص $maxPages صفحات كحد أقصى';
+      });
+    } else {
+      setState(() {
+        _planLimitWarning = null;
+      });
+    }
+  }
+
+  int _getSelectedPageCount() {
+    final totalPages = widget.fileInfo.totalPages;
+    if (_selectedPageRangeOption == 0) {
+      // All pages
+      return totalPages > 0 ? totalPages : 1;
+    } else {
+      // Custom range
+      final from = int.tryParse(_fromPageController.text) ?? 1;
+      final to = int.tryParse(_toPageController.text) ?? totalPages;
+      return (to - from + 1).clamp(1, totalPages);
+    }
+  }
+
+  String _getOutputTypeString() {
+    switch (_selectedOutputType) {
+      case 0:
+        return 'summaryOnly';
+      case 1:
+        return 'questionsOnly';
+      case 2:
+        return 'summaryAndQuestions';
+      default:
+        return 'summaryOnly';
+    }
+  }
+
+  String _getSummaryLengthString() {
+    switch (_selectedLength) {
+      case 0:
+        return 'short';
+      case 1:
+        return 'medium';
+      case 2:
+        return 'long';
+      case 3:
+        return 'custom';
+      default:
+        return 'short';
+    }
   }
 
   @override
@@ -144,6 +231,35 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
 
     if (_pageRangeError != null) {
       return;
+    }
+
+    // Check subscription limits
+    final uid = AuthService.instance.userId;
+    if (uid != null) {
+      final selectedPageCount = _getSelectedPageCount();
+      final outputType = _getOutputTypeString();
+      final summaryLength = _getSummaryLengthString();
+
+      debugPrint('[SummaryOptions] Checking limits - pages: $selectedPageCount, output: $outputType, length: $summaryLength');
+
+      final checkResult = await _subscriptionService.checkCanGenerate(
+        uid: uid,
+        selectedPageCount: selectedPageCount,
+        outputType: outputType,
+        summaryLength: summaryLength,
+      );
+
+      if (!checkResult.allowed) {
+        debugPrint('[SummaryOptions] BLOCKED: ${checkResult.blockedReason}');
+        if (mounted) {
+          await showPaywallDialog(
+            context: context,
+            customTitle: 'لقد وصلت إلى الحد المجاني',
+            customSubtitle: checkResult.blockedReasonArabic,
+          );
+        }
+        return;
+      }
     }
 
     setState(() {
@@ -248,6 +364,12 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
 
                 // Page Range Section
                 _buildPageRangeSection(),
+
+                // Plan limit warning
+                if (_planLimitWarning != null) ...[
+                  const SizedBox(height: 12),
+                  _buildPlanLimitWarning(),
+                ],
                 const SizedBox(height: 24),
 
                 // Output Type Section
@@ -267,6 +389,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                       onTap: _isExtracting
                           ? null
                           : () {
+                              AppFeedbackService.instance.selection();
                               setState(() {
                                 _selectedOutputType = index;
                               });
@@ -293,6 +416,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                       onTap: _isExtracting
                           ? null
                           : () {
+                              AppFeedbackService.instance.selection();
                               setState(() {
                                 _selectedLength = index;
                               });
@@ -303,10 +427,11 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                 const SizedBox(height: 32),
 
                 // Generate button
-                CustomButton(
-                  text: _isExtracting ? 'جاري الاستخراج...' : 'إنشاء النتيجة',
-                  onPressed: _isExtracting ? null : _extractAndNavigate,
+                PremiumButton(
+                  text: 'إنشاء النتيجة',
+                  onPressed: _extractAndNavigate,
                   isLoading: _isExtracting,
+                  icon: Icons.auto_awesome_rounded,
                 ),
                 const SizedBox(height: 32),
               ],
@@ -360,10 +485,12 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
           onTap: _isExtracting
               ? null
               : () {
+                  AppFeedbackService.instance.selection();
                   setState(() {
                     _selectedPageRangeOption = 0;
                     _pageRangeError = null;
                   });
+                  _checkPlanLimits();
                 },
         ),
         const SizedBox(height: 12),
@@ -377,9 +504,11 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
           onTap: _isExtracting
               ? null
               : () {
+                  AppFeedbackService.instance.selection();
                   setState(() {
                     _selectedPageRangeOption = 1;
                   });
+                  _checkPlanLimits();
                 },
         ),
 
@@ -518,6 +647,8 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                 _pageRangeError = null;
               });
             }
+            // Check plan limits after input change
+            _checkPlanLimits();
           },
         ),
       ],
@@ -720,6 +851,39 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
               style: AppTextStyles.bodySmall.copyWith(
                 color: AppColors.textSecondary,
                 height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlanLimitWarning() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.accent.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: AppColors.accent.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.warning_amber_rounded,
+            color: AppColors.accent,
+            size: 20,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _planLimitWarning!,
+              style: AppTextStyles.bodySmall.copyWith(
+                color: AppColors.accent,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ),
