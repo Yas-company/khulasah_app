@@ -9,7 +9,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.example.khulasahApp</string>
+	<string>com.yas.khulasah</string>
 	<key>PROJECT_ID</key>
 	<string>khulasah-prod</string>
 	<key>STORAGE_BUCKET</key>
@@ -25,6 +25,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:577628540410:ios:a00f302bd8ef7fc3e2e843</string>
+	<string>1:577628540410:ios:1c595525bad48ba7e2e843</string>
 </dict>
 </plist>
