@@ -3,8 +3,15 @@ import 'package:flutter/foundation.dart';
 
 import '../models/user_plan.dart';
 
-/// Debug flag to bypass quota checks during development
-const bool bypassQuotaInDebug = true;
+/// Design-only mode flag.
+/// When true:
+/// - All quota checks are bypassed (checkCanGenerate always returns success)
+/// - No usage is counted (incrementUsageAfterSuccess is a no-op)
+/// - Plans page and paywall UI remain available but are never shown automatically
+/// - All users can use all features without any blocking
+///
+/// Set to false when ready to enable real subscription logic.
+const bool designOnlyMode = true;
 
 /// Service for managing user subscriptions and usage limits.
 class SubscriptionService {
@@ -74,6 +81,9 @@ class SubscriptionService {
   }
 
   /// Check if user can generate with the given parameters
+  ///
+  /// In design-only mode, this always returns success to allow all users
+  /// to use all features without any blocking.
   Future<UsageCheckResult> checkCanGenerate({
     required String uid,
     required int selectedPageCount,
@@ -85,9 +95,9 @@ class SubscriptionService {
     debugPrint('[Subscription] outputType: $outputType');
     debugPrint('[Subscription] summaryLength: $summaryLength');
 
-    // Bypass in debug mode if enabled
-    if (kDebugMode && bypassQuotaInDebug) {
-      debugPrint('[Subscription] DEBUG: Bypassing quota check');
+    // Design-only mode: always allow, no blocking
+    if (designOnlyMode) {
+      debugPrint('[Subscription] DESIGN MODE: All features allowed, no limits enforced');
       return UsageCheckResult.success();
     }
 
@@ -136,7 +146,15 @@ class SubscriptionService {
   }
 
   /// Increment usage after successful generation
+  ///
+  /// In design-only mode, this is a no-op (no usage is counted).
   Future<void> incrementUsageAfterSuccess(String uid) async {
+    // Design-only mode: don't count usage
+    if (designOnlyMode) {
+      debugPrint('[Subscription] DESIGN MODE: Skipping usage increment');
+      return;
+    }
+
     debugPrint('[Subscription] Incrementing usage for user: $uid');
 
     try {

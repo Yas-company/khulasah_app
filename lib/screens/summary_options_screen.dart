@@ -114,6 +114,14 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
   }
 
   void _checkPlanLimits() {
+    // Design-only mode: never show plan limit warnings
+    if (designOnlyMode) {
+      setState(() {
+        _planLimitWarning = null;
+      });
+      return;
+    }
+
     if (_currentPlan == null) return;
 
     final selectedPageCount = _getSelectedPageCount();

@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 /// App configuration for different build modes.
 ///
 /// - Debug: Uses local Node.js backend (http://127.0.0.1:3000)
-/// - Release: Uses Cloudflare Worker (https://khulasah-worker.mhmadajoor5.workers.dev)
+/// - Release: Uses Cloudflare Worker (https://khulasah-worker.mhmdajoor5.workers.dev)
 class AppConfig {
   AppConfig._();
 
@@ -12,7 +12,7 @@ class AppConfig {
 
   /// Production backend URL (Cloudflare Worker)
   static const String _productionBackendUrl =
-      'https://khulasah-worker.mhmadajoor5.workers.dev';
+      'https://khulasah-worker.mhmdajoor5.workers.dev';
 
   /// Get the appropriate backend URL based on build mode
   static String get backendUrl {

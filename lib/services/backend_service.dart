@@ -14,7 +14,8 @@ import 'firebase_functions_service.dart';
 /// This service uses a priority-based approach:
 /// 1. Try backend (local in debug, Cloudflare Worker in release)
 /// 2. If backend fails, try Firebase Cloud Functions
-/// 3. If all backends fail, use local dummy generation
+/// 3. Debug only: If all backends fail, use local dummy generation
+/// 4. Release: Show friendly error message if all backends fail
 ///
 /// SECURITY NOTES:
 /// - Never store API keys in Flutter/Dart code
@@ -83,8 +84,16 @@ class BackendService {
       debugPrint('[Backend] Firebase generation failed: $e');
     }
 
-    // Fallback to local dummy generation
-    debugPrint('[Backend] Using local dummy fallback...');
+    // In release mode, don't use local dummy fallback - show error instead
+    if (AppConfig.isRelease) {
+      debugPrint('[Backend] Release mode - all backends failed, returning error');
+      return GeneratedResult.error(
+        'تعذر الاتصال بخدمة التلخيص حالياً، يرجى المحاولة لاحقاً.',
+      );
+    }
+
+    // Debug mode only: Fallback to local dummy generation
+    debugPrint('[Backend] Debug mode - using local dummy fallback...');
     final result = await _generateLocalDummyResult(fileInfo, options);
     debugPrint('[Backend] Local dummy result generated');
     return result;
