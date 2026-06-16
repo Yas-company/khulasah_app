@@ -1,68 +1,78 @@
 /**
- * Khulasah Local Backend
+ * Khulasah Cloudflare Worker
  *
- * A local Node.js server that connects to OpenRouter for AI-powered
+ * A Cloudflare Worker that connects to OpenRouter for AI-powered
  * PDF summarization and Q&A generation.
+ *
+ * Deploy: wrangler deploy
+ * Configure OPENROUTER_API_KEY secret: wrangler secret put OPENROUTER_API_KEY
  */
 
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-
-const app = express();
-
-// Middleware
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-
-// Configuration
-const PORT = process.env.PORT || 3000;
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/auto';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODEL = 'openrouter/auto';
 
-/**
- * Health check endpoint
- */
-app.get('/health', (req, res) => {
-  console.log('[Health] Health check requested');
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+export default {
+  async fetch(request, env, ctx) {
+    // Handle CORS
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
+        },
+      });
+    }
 
-/**
- * Generate result endpoint
- * Receives extracted PDF text and returns AI-generated summary/Q&A
- */
-app.post('/generate-result', async (req, res) => {
+    const url = new URL(request.url);
+
+    // Health check endpoint
+    if (url.pathname === '/health') {
+      return jsonResponse({ status: 'ok', timestamp: new Date().toISOString() });
+    }
+
+    // Generate result endpoint
+    if (url.pathname === '/generate-result' && request.method === 'POST') {
+      return handleGenerateResult(request, env);
+    }
+
+    return jsonResponse({ error: 'Not found' }, 404);
+  },
+};
+
+async function handleGenerateResult(request, env) {
   console.log('[Generate] Request received');
 
-  const { extractedText, outputType, summaryLength, outputLanguage, fileName } = req.body;
+  let body;
+  try {
+    body = await request.json();
+  } catch (e) {
+    return jsonResponse({ success: false, error: 'Invalid JSON body' }, 400);
+  }
+
+  const { extractedText, outputType, summaryLength, outputLanguage, fileName } = body;
 
   // Validate required fields
   if (!extractedText) {
     console.log('[Generate] Error: Missing extractedText');
-    return res.status(400).json({
-      success: false,
-      error: 'Missing required field: extractedText'
-    });
+    return jsonResponse({ success: false, error: 'Missing required field: extractedText' }, 400);
   }
 
-  if (!OPENROUTER_API_KEY) {
+  const apiKey = env.OPENROUTER_API_KEY;
+  if (!apiKey) {
     console.log('[Generate] Error: OPENROUTER_API_KEY not configured');
-    return res.status(500).json({
-      success: false,
-      error: 'Server configuration error: API key not set'
-    });
+    return jsonResponse({ success: false, error: 'Server configuration error: API key not set' }, 500);
   }
 
+  const lang = outputLanguage || 'ar';
   console.log(`[Generate] Processing file: ${fileName || 'unknown'}`);
-  console.log(`[Generate] Output type: ${outputType}, Length: ${summaryLength}, Language: ${outputLanguage || 'ar'}`);
+  console.log(`[Generate] Output type: ${outputType}, Length: ${summaryLength}, Language: ${lang}`);
   console.log(`[Generate] Text length: ${extractedText.length} characters`);
 
   try {
     // Build the prompt based on output type and language
-    const lang = outputLanguage || 'ar';
     const prompt = buildPrompt(extractedText, outputType, summaryLength, lang);
+    const systemPrompt = getSystemPrompt(lang);
 
     console.log('[Generate] Calling OpenRouter API...');
 
@@ -71,34 +81,25 @@ app.post('/generate-result', async (req, res) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'Authorization': `Bearer ${apiKey}`,
         'HTTP-Referer': 'https://khulasah.app',
-        'X-Title': 'Khulasah App'
+        'X-Title': 'Khulasah App',
       },
       body: JSON.stringify({
         model: OPENROUTER_MODEL,
         messages: [
-          {
-            role: 'system',
-            content: getSystemPrompt(lang)
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompt },
         ],
         temperature: 0.7,
-        max_tokens: 4000
-      })
+        max_tokens: 4000,
+      }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
       console.log(`[Generate] OpenRouter API error: ${response.status} - ${errorText}`);
-      return res.status(500).json({
-        success: false,
-        error: `OpenRouter API error: ${response.status}`
-      });
+      return jsonResponse({ success: false, error: `OpenRouter API error: ${response.status}` }, 500);
     }
 
     const data = await response.json();
@@ -109,10 +110,7 @@ app.post('/generate-result', async (req, res) => {
 
     if (!content) {
       console.log('[Generate] Error: No content in OpenRouter response');
-      return res.status(500).json({
-        success: false,
-        error: 'No content in API response'
-      });
+      return jsonResponse({ success: false, error: 'No content in API response' }, 500);
     }
 
     // Parse the JSON response from the AI
@@ -121,16 +119,12 @@ app.post('/generate-result', async (req, res) => {
     console.log('[Generate] Result parsed successfully');
     console.log(`[Generate] Has summary: ${!!result.summary}, Has Q&A: ${result.questionsAndAnswers?.length || 0}`);
 
-    return res.json(result);
-
+    return jsonResponse(result);
   } catch (error) {
     console.log(`[Generate] Error: ${error.message}`);
-    return res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    return jsonResponse({ success: false, error: error.message }, 500);
   }
-});
+}
 
 /**
  * Get the system prompt for the AI based on output language
@@ -182,9 +176,7 @@ Required response format:
 function buildPrompt(text, outputType, summaryLength, language) {
   // Truncate text if too long (keep first 15000 chars)
   const maxLength = 15000;
-  const truncatedText = text.length > maxLength
-    ? text.substring(0, maxLength) + '...'
-    : text;
+  const truncatedText = text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
 
   if (language === 'en') {
     return buildEnglishPrompt(truncatedText, outputType, summaryLength);
@@ -308,9 +300,8 @@ function parseAIResponse(content, outputType) {
       success: true,
       resultType: resultType,
       summary: parsed.summary || '',
-      questionsAndAnswers: parsed.questionsAndAnswers || []
+      questionsAndAnswers: parsed.questionsAndAnswers || [],
     };
-
   } catch (error) {
     console.log(`[Parse] Error parsing AI response: ${error.message}`);
     console.log(`[Parse] Raw content: ${content.substring(0, 500)}...`);
@@ -320,18 +311,20 @@ function parseAIResponse(content, outputType) {
       success: true,
       resultType: 'summaryOnly',
       summary: content,
-      questionsAndAnswers: []
+      questionsAndAnswers: [],
     };
   }
 }
 
-// Start server
-app.listen(PORT, () => {
-  console.log('========================================');
-  console.log('  Khulasah Local Backend');
-  console.log('========================================');
-  console.log(`Server running on http://127.0.0.1:${PORT}`);
-  console.log(`Model: ${OPENROUTER_MODEL}`);
-  console.log(`API Key configured: ${OPENROUTER_API_KEY ? 'Yes' : 'No'}`);
-  console.log('========================================');
-});
+/**
+ * Helper function to return JSON response
+ */
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    },
+  });
+}

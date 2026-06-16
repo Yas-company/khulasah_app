@@ -30,6 +30,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     with SingleTickerProviderStateMixin {
   int _selectedOutputType = 0;
   int _selectedLength = 0;
+  int _selectedLanguage = 0;
   bool _isProcessing = true;
   bool _isExtracting = false;
   late AnimationController _animationController;
@@ -59,6 +60,11 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     {'icon': Icons.looks_5, 'title': '5 صفحات'},
     {'icon': Icons.looks, 'title': '10 صفحات'},
     {'icon': Icons.tune, 'title': 'مخصص'},
+  ];
+
+  final List<Map<String, dynamic>> _languages = [
+    {'icon': Icons.language, 'title': 'العربية'},
+    {'icon': Icons.translate, 'title': 'English'},
   ];
 
   @override
@@ -307,6 +313,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
       final options = SummaryOptions(
         outputTypeIndex: _selectedOutputType,
         lengthIndex: _selectedLength,
+        outputLanguageIndex: _selectedLanguage,
       );
 
       Navigator.of(context).push(
@@ -378,6 +385,33 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                   const SizedBox(height: 12),
                   _buildPlanLimitWarning(),
                 ],
+                const SizedBox(height: 24),
+
+                // Output Language Section
+                Text(
+                  'لغة النتيجة',
+                  style: AppTextStyles.titleLarge,
+                ),
+                const SizedBox(height: 16),
+                ...List.generate(_languages.length, (index) {
+                  final lang = _languages[index];
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: OptionCard(
+                      icon: lang['icon'] as IconData,
+                      title: lang['title'] as String,
+                      isSelected: _selectedLanguage == index,
+                      onTap: _isExtracting
+                          ? null
+                          : () {
+                              AppFeedbackService.instance.selection();
+                              setState(() {
+                                _selectedLanguage = index;
+                              });
+                            },
+                    ),
+                  );
+                }),
                 const SizedBox(height: 24),
 
                 // Output Type Section

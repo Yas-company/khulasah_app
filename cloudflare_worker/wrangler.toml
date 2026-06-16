@@ -1,0 +1,10 @@
+name = "khulasah-worker"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# Configure your account ID (get from Cloudflare dashboard)
+# account_id = "your-account-id"
+
+# Production deployment configuration
+# After deploying, set the secret:
+# wrangler secret put OPENROUTER_API_KEY

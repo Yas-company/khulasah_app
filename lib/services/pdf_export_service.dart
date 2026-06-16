@@ -8,6 +8,15 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/generated_result.dart';
 
+/// Error codes for PDF export
+enum PdfExportError {
+  none,
+  fontLoadFailed,
+  pdfBuildFailed,
+  pdfSaveFailed,
+  pdfShareFailed,
+}
+
 /// Service for exporting results to PDF and sharing.
 ///
 /// Creates Arabic-friendly PDF documents with:
@@ -25,6 +34,7 @@ class PdfExportService {
   pw.Font? _arabicBoldFont;
   bool _fontsLoaded = false;
   String? _fontLoadError;
+  PdfExportError _lastError = PdfExportError.none;
 
   PdfExportService._();
 
@@ -87,80 +97,153 @@ class PdfExportService {
     required String summaryLength,
     required GeneratedResult result,
     String pageRangeLabel = 'كل الصفحات',
+    String outputLanguage = 'ar',
   }) async {
-    debugPrint('[PDF] Export started');
-    debugPrint('[PDF] File: $fileName');
+    _lastError = PdfExportError.none;
+
+    debugPrint('[PDF] ========== Export Started ==========');
+    debugPrint('[PDF] Original file name: $fileName');
     debugPrint('[PDF] Output type: $outputType');
     debugPrint('[PDF] Page range: $pageRangeLabel');
+    debugPrint('[PDF] Language: $outputLanguage');
 
+    // Step 1: Load fonts
     try {
-      // Load fonts first
       final fontsLoaded = await _loadFonts();
       if (!fontsLoaded) {
-        debugPrint('[PDF] Export failed: Could not load fonts');
+        _lastError = PdfExportError.fontLoadFailed;
+        debugPrint('[PDF] ERROR: Font loading failed');
         debugPrint('[PDF] Font error: $_fontLoadError');
         return false;
       }
+    } catch (e) {
+      _lastError = PdfExportError.fontLoadFailed;
+      debugPrint('[PDF] ERROR: Font loading exception: $e');
+      return false;
+    }
 
-      // Create PDF document
-      debugPrint('[PDF] Creating PDF document...');
+    // Step 2: Build PDF document
+    Uint8List pdfBytes;
+    try {
+      debugPrint('[PDF] Building PDF document...');
       final pdf = pw.Document();
 
-      // Add content pages
+      // Add content pages (Arabic file name is used INSIDE the PDF content)
       pdf.addPage(
         pw.MultiPage(
           pageFormat: PdfPageFormat.a4,
           textDirection: pw.TextDirection.rtl,
           margin: const pw.EdgeInsets.all(40),
           build: (context) => _buildContent(
-            fileName: fileName,
+            fileName: fileName, // Original Arabic name displayed inside PDF
             outputType: outputType,
             summaryLength: summaryLength,
+            outputLanguage: outputLanguage,
             result: result,
             pageRangeLabel: pageRangeLabel,
           ),
         ),
       );
 
-      // Get temporary directory
-      final tempDir = await getTemporaryDirectory();
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final sanitizedFileName = fileName.replaceAll(RegExp(r'[^\w\s\-\.]'), '_');
-      final pdfPath = '${tempDir.path}/khulasah_${sanitizedFileName}_$timestamp.pdf';
+      pdfBytes = await pdf.save();
+      debugPrint('[PDF] PDF bytes generated: ${pdfBytes.length} bytes');
 
-      // Save PDF file
-      debugPrint('[PDF] Saving PDF to: $pdfPath');
-      final file = File(pdfPath);
-      final pdfBytes = await pdf.save();
+      if (pdfBytes.isEmpty) {
+        _lastError = PdfExportError.pdfBuildFailed;
+        debugPrint('[PDF] ERROR: PDF bytes are empty');
+        return false;
+      }
+    } catch (e, stackTrace) {
+      _lastError = PdfExportError.pdfBuildFailed;
+      debugPrint('[PDF] ERROR: PDF build failed: $e');
+      debugPrint('[PDF] Stack trace: $stackTrace');
+      return false;
+    }
+
+    // Step 3: Save PDF file with SAFE English-only name
+    File file;
+    String safePdfName;
+    try {
+      // Use application documents directory (more reliable on real devices)
+      final docsDir = await getApplicationDocumentsDirectory();
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+
+      // IMPORTANT: Use English-only safe file name for the path
+      // Arabic file name is displayed inside the PDF content, not in the path
+      safePdfName = 'khulasah_result_$timestamp.pdf';
+      final pdfPath = '${docsDir.path}/$safePdfName';
+
+      debugPrint('[PDF] Safe file name: $safePdfName');
+      debugPrint('[PDF] Save path: $pdfPath');
+
+      file = File(pdfPath);
       await file.writeAsBytes(pdfBytes);
 
-      debugPrint('[PDF] File saved: ${pdfBytes.length} bytes');
+      // Verify file was saved correctly
+      final fileExists = await file.exists();
+      final fileSize = await file.length();
 
-      // Share the file
-      debugPrint('[PDF] Opening share dialog...');
-      final xFile = XFile(pdfPath);
+      debugPrint('[PDF] File exists: $fileExists');
+      debugPrint('[PDF] File size: $fileSize bytes');
+
+      if (!fileExists || fileSize == 0) {
+        _lastError = PdfExportError.pdfSaveFailed;
+        debugPrint('[PDF] ERROR: File verification failed');
+        return false;
+      }
+    } catch (e, stackTrace) {
+      _lastError = PdfExportError.pdfSaveFailed;
+      debugPrint('[PDF] ERROR: PDF save failed: $e');
+      debugPrint('[PDF] Stack trace: $stackTrace');
+      return false;
+    }
+
+    // Step 4: Share the file
+    try {
+      debugPrint('[PDF] Share started...');
+
+      final xFile = XFile(
+        file.path,
+        mimeType: 'application/pdf',
+        name: safePdfName,
+      );
+
       await Share.shareXFiles(
         [xFile],
-        subject: 'خُلاصة - $fileName',
+        subject: 'خُلاصة - ملخص PDF',
         text: 'نتيجة تلخيص الملف من تطبيق خُلاصة',
       );
 
-      debugPrint('[PDF] Export completed successfully');
+      debugPrint('[PDF] Share completed successfully');
+      debugPrint('[PDF] ========== Export Completed ==========');
       return true;
     } catch (e, stackTrace) {
-      debugPrint('[PDF] Export failed: $e');
+      _lastError = PdfExportError.pdfShareFailed;
+      debugPrint('[PDF] ERROR: Share failed: $e');
       debugPrint('[PDF] Stack trace: $stackTrace');
+      // PDF was created but sharing failed
       return false;
     }
   }
 
-  /// Get user-friendly error message
+  /// Get user-friendly error message based on last error
   String getErrorMessage() {
-    if (_fontLoadError != null) {
-      return 'تعذر تحميل الخطوط العربية';
+    switch (_lastError) {
+      case PdfExportError.fontLoadFailed:
+        return 'تعذر تحميل الخطوط العربية';
+      case PdfExportError.pdfBuildFailed:
+        return 'تعذر إنشاء ملف PDF حاليًا، حاول مرة أخرى.';
+      case PdfExportError.pdfSaveFailed:
+        return 'تعذر حفظ ملف PDF، تأكد من وجود مساحة كافية.';
+      case PdfExportError.pdfShareFailed:
+        return 'تم إنشاء ملف PDF ولكن تعذر فتح المشاركة.';
+      case PdfExportError.none:
+        return 'تعذر إنشاء ملف PDF حاليًا، حاول مرة أخرى.';
     }
-    return 'تعذر إنشاء ملف PDF حاليًا، حاول مرة أخرى.';
   }
+
+  /// Get the last error code (for debugging)
+  PdfExportError get lastError => _lastError;
 
   List<pw.Widget> _buildContent({
     required String fileName,
@@ -168,6 +251,7 @@ class PdfExportService {
     required String summaryLength,
     required GeneratedResult result,
     String pageRangeLabel = 'كل الصفحات',
+    String outputLanguage = 'ar',
   }) {
     final widgets = <pw.Widget>[];
 
@@ -228,6 +312,8 @@ class PdfExportService {
             _buildInfoRow('نوع المخرجات:', _getOutputTypeLabel(outputType)),
             pw.SizedBox(height: 8),
             _buildInfoRow('طول الملخص:', _getSummaryLengthLabel(summaryLength)),
+            pw.SizedBox(height: 8),
+            _buildInfoRow('لغة النتيجة:', _getOutputLanguageLabel(outputLanguage)),
             pw.SizedBox(height: 8),
             _buildInfoRow('التاريخ:', _formatDate(DateTime.now())),
           ],
@@ -445,6 +531,17 @@ class PdfExportService {
         return 'مخصص';
       default:
         return 'متوسط';
+    }
+  }
+
+  String _getOutputLanguageLabel(String language) {
+    switch (language) {
+      case 'ar':
+        return 'العربية';
+      case 'en':
+        return 'English';
+      default:
+        return 'العربية';
     }
   }
 

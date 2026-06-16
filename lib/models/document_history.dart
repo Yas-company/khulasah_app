@@ -10,6 +10,7 @@ class DocumentHistory {
   final int extractedTextLength;
   final String outputType;
   final String summaryLength;
+  final String outputLanguage;
   final String? generatedSummary;
   final List<Map<String, String>>? questionsAndAnswers;
   final DateTime createdAt;
@@ -27,6 +28,7 @@ class DocumentHistory {
     required this.extractedTextLength,
     required this.outputType,
     required this.summaryLength,
+    this.outputLanguage = 'ar',
     this.generatedSummary,
     this.questionsAndAnswers,
     required this.createdAt,
@@ -55,6 +57,7 @@ class DocumentHistory {
       extractedTextLength: data['extractedTextLength'] ?? 0,
       outputType: data['outputType'] ?? 'summary',
       summaryLength: data['summaryLength'] ?? 'medium',
+      outputLanguage: data['outputLanguage'] ?? 'ar',
       generatedSummary: data['generatedSummary'],
       questionsAndAnswers: qaList,
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -73,6 +76,7 @@ class DocumentHistory {
       'extractedTextLength': extractedTextLength,
       'outputType': outputType,
       'summaryLength': summaryLength,
+      'outputLanguage': outputLanguage,
       'generatedSummary': generatedSummary,
       'questionsAndAnswers': questionsAndAnswers,
       'createdAt': Timestamp.fromDate(createdAt),
@@ -117,6 +121,18 @@ class DocumentHistory {
         return 'مخصص';
       default:
         return 'متوسط';
+    }
+  }
+
+  /// Get label for output language
+  String get outputLanguageLabel {
+    switch (outputLanguage) {
+      case 'ar':
+        return 'العربية';
+      case 'en':
+        return 'English';
+      default:
+        return 'العربية';
     }
   }
 

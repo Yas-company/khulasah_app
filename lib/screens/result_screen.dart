@@ -125,6 +125,7 @@ class _ResultScreenState extends State<ResultScreen> {
       extractedTextLength: widget.fileInfo.extractedText?.length ?? 0,
       outputType: outputTypeMap[widget.options.outputTypeIndex] ?? 'summary',
       summaryLength: lengthMap[widget.options.lengthIndex] ?? 'medium',
+      outputLanguage: widget.options.outputLanguageCode,
       totalPages: widget.fileInfo.totalPages,
       fromPage: widget.fileInfo.actualFromPage,
       toPage: widget.fileInfo.actualToPage,
@@ -172,6 +173,7 @@ class _ResultScreenState extends State<ResultScreen> {
       extractedTextLength: widget.fileInfo.extractedText?.length ?? 0,
       outputType: outputTypeMap[widget.options.outputTypeIndex] ?? 'summary',
       summaryLength: lengthMap[widget.options.lengthIndex] ?? 'medium',
+      outputLanguage: widget.options.outputLanguageCode,
       generatedSummary: _result!.summary,
       questionsAndAnswers: qaList,
       totalPages: widget.fileInfo.totalPages,
@@ -222,6 +224,7 @@ class _ResultScreenState extends State<ResultScreen> {
       fileName: widget.fileInfo.fileName,
       outputType: outputTypeMap[widget.options.outputTypeIndex] ?? 'summaryOnly',
       summaryLength: lengthMap[widget.options.lengthIndex] ?? 'medium',
+      outputLanguage: widget.options.outputLanguageCode,
       result: _result!,
       pageRangeLabel: widget.fileInfo.pageRangeLabel,
     );
@@ -417,6 +420,11 @@ class _ResultScreenState extends State<ResultScreen> {
                           icon: Icons.format_size,
                           label: widget.options.lengthLabel,
                           color: AppColors.accent,
+                        ),
+                        _buildInfoChip(
+                          icon: Icons.language,
+                          label: widget.options.outputLanguageLabel,
+                          color: AppColors.primary,
                         ),
                         _buildInfoChip(
                           icon: Icons.auto_stories,

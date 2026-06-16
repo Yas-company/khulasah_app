@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/document_history.dart';
 import '../models/generated_result.dart';
+import '../services/app_feedback_service.dart';
+import '../services/firestore_service.dart';
 import '../services/pdf_export_service.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_text_styles.dart';
@@ -20,7 +22,127 @@ class HistoryDetailScreen extends StatefulWidget {
 
 class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
   final PdfExportService _pdfExportService = PdfExportService.instance;
+  final FirestoreService _firestoreService = FirestoreService.instance;
   bool _isExporting = false;
+  bool _isDeleting = false;
+
+  /// Show confirmation dialog for deleting the history item
+  Future<bool> _showDeleteConfirmation() async {
+    debugPrint('[HistoryDetail] Delete requested for: ${widget.history.id}');
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          backgroundColor: AppColors.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.error.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.delete_outline,
+                  color: AppColors.error,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'حذف النتيجة؟',
+                style: AppTextStyles.titleLarge,
+              ),
+            ],
+          ),
+          content: Text(
+            'هل أنت متأكد أنك تريد حذف هذه النتيجة من السجل؟',
+            style: AppTextStyles.bodyMedium.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(
+                'إلغاء',
+                style: AppTextStyles.labelLarge.copyWith(
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.error,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: Text(
+                'حذف',
+                style: AppTextStyles.labelLarge.copyWith(
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    return confirmed ?? false;
+  }
+
+  /// Delete the history item
+  Future<void> _deleteHistoryItem() async {
+    if (_isDeleting || widget.history.id == null) return;
+
+    final confirmed = await _showDeleteConfirmation();
+    if (!confirmed) return;
+
+    setState(() => _isDeleting = true);
+    debugPrint('[HistoryDetail] Deleting document: ${widget.history.id}');
+
+    final success = await _firestoreService.deleteDocumentHistory(widget.history.id!);
+
+    if (!mounted) return;
+
+    if (success) {
+      debugPrint('[HistoryDetail] Delete success: ${widget.history.id}');
+      await AppFeedbackService.instance.success();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تم حذف النتيجة من السجل'),
+          backgroundColor: AppColors.success,
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      // Navigate back and signal that the item was deleted
+      Navigator.of(context).pop(true);
+    } else {
+      debugPrint('[HistoryDetail] Delete failed: ${widget.history.id}');
+      await AppFeedbackService.instance.error();
+
+      setState(() => _isDeleting = false);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('حدث خطأ أثناء حذف النتيجة'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
 
   /// Export history result to PDF
   Future<void> _exportPdf() async {
@@ -73,6 +195,7 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
       fileName: widget.history.fileName,
       outputType: widget.history.outputType,
       summaryLength: widget.history.summaryLength,
+      outputLanguage: widget.history.outputLanguage,
       result: result,
       pageRangeLabel: widget.history.pageRangeLabel,
     );
@@ -112,6 +235,22 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
             style: AppTextStyles.headlineSmall,
           ),
           centerTitle: true,
+          actions: [
+            IconButton(
+              icon: _isDeleting
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(AppColors.error),
+                      ),
+                    )
+                  : const Icon(Icons.delete_outline, color: AppColors.error),
+              onPressed: _isDeleting ? null : _deleteHistoryItem,
+              tooltip: 'حذف النتيجة',
+            ),
+          ],
         ),
         body: SafeArea(
           child: _buildContent(),
@@ -170,6 +309,11 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
                           icon: Icons.format_size,
                           label: widget.history.summaryLengthLabel,
                           color: AppColors.accent,
+                        ),
+                        _buildInfoChip(
+                          icon: Icons.language,
+                          label: widget.history.outputLanguageLabel,
+                          color: AppColors.primary,
                         ),
                         _buildInfoChip(
                           icon: Icons.calendar_today,

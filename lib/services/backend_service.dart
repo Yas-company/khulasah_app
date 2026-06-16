@@ -126,10 +126,11 @@ class BackendService {
 
     final outputType = outputTypeMap[options.outputTypeIndex] ?? 'summaryOnly';
     final summaryLength = lengthMap[options.lengthIndex] ?? 'medium';
+    final outputLanguage = options.outputLanguageCode;
 
     final backendUrl = AppConfig.backendUrl;
     debugPrint('[Backend] Calling $backendUrl/generate-result');
-    debugPrint('[Backend] Output type: $outputType, Length: $summaryLength');
+    debugPrint('[Backend] Output type: $outputType, Length: $summaryLength, Language: $outputLanguage');
     debugPrint('[Backend] Page range: ${fileInfo.pageRangeLabel}');
 
     try {
@@ -143,6 +144,7 @@ class BackendService {
               'extractedText': fileInfo.extractedText,
               'outputType': outputType,
               'summaryLength': summaryLength,
+              'outputLanguage': outputLanguage,
               'fileName': fileInfo.fileName,
               'fromPage': fileInfo.actualFromPage,
               'toPage': fileInfo.actualToPage,
