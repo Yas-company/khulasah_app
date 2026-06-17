@@ -18,7 +18,6 @@ class UploadPdfScreen extends StatefulWidget {
 class _UploadPdfScreenState extends State<UploadPdfScreen> {
   SelectedFileInfo? _selectedFile;
   bool _isLoading = false;
-  bool _isExtracting = false;
   final PdfTextService _pdfTextService = PdfTextService();
 
   Future<void> _selectFile() async {
@@ -52,12 +51,13 @@ class _UploadPdfScreenState extends State<UploadPdfScreen> {
         return;
       }
 
-      // Get page count for the PDF
+      // Get page count for the PDF (no text extraction yet)
       int totalPages = 0;
       if (file.path != null) {
         final pageCountResult = await _pdfTextService.getPageCount(file.path);
         if (pageCountResult.success) {
           totalPages = pageCountResult.pageCount;
+          debugPrint('[UploadPdf] totalPages: $totalPages');
         }
       }
 
@@ -81,42 +81,20 @@ class _UploadPdfScreenState extends State<UploadPdfScreen> {
     }
   }
 
-  Future<void> _extractTextAndNavigate() async {
+  /// Navigate to options screen without extracting text.
+  /// Text extraction will happen in SummaryOptionsScreen when user selects page range.
+  void _navigateToOptions() {
     if (_selectedFile == null) return;
 
-    setState(() {
-      _isExtracting = true;
-    });
+    debugPrint('[UploadPdf] Navigating to options without full extraction');
+    debugPrint('[UploadPdf] fileName: ${_selectedFile!.fileName}');
+    debugPrint('[UploadPdf] totalPages: ${_selectedFile!.totalPages}');
 
-    try {
-      final result = await _pdfTextService.extractText(_selectedFile!.filePath);
-
-      if (!mounted) return;
-
-      // Always navigate to summary options screen with the result
-      final updatedFile = _selectedFile!.copyWith(
-        extractedText: result.text,
-        textQuality: result.quality,
-        readableRatio: result.readableRatio,
-        errorMessage: result.errorMessage,
-      );
-
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => SummaryOptionsScreen(fileInfo: updatedFile),
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        _showErrorSnackBar('حدث خطأ أثناء استخراج النص');
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isExtracting = false;
-        });
-      }
-    }
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SummaryOptionsScreen(fileInfo: _selectedFile!),
+      ),
+    );
   }
 
   void _showErrorSnackBar(String message) {
@@ -149,7 +127,7 @@ class _UploadPdfScreenState extends State<UploadPdfScreen> {
           elevation: 0,
           leading: IconButton(
             icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
-            onPressed: _isExtracting ? null : () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.of(context).pop(),
           ),
           title: Text(
             'رفع ملف PDF',
@@ -164,17 +142,15 @@ class _UploadPdfScreenState extends State<UploadPdfScreen> {
               children: [
                 const SizedBox(height: 24),
                 Expanded(
-                  child: _isExtracting
-                      ? _buildExtractingState()
-                      : FileUploadBox(
-                          icon: Icons.cloud_upload_outlined,
-                          title: 'اسحب ملفك هنا أو اختر ملف PDF',
-                          subtitle: _selectedFile != null
-                              ? _selectedFile!.fileSizeFormatted
-                              : 'يدعم ملفات PDF فقط',
-                          selectedFileName: _selectedFile?.fileName,
-                          onTap: _isLoading ? null : _selectFile,
-                        ),
+                  child: FileUploadBox(
+                    icon: Icons.cloud_upload_outlined,
+                    title: 'اسحب ملفك هنا أو اختر ملف PDF',
+                    subtitle: _selectedFile != null
+                        ? _selectedFile!.fileSizeFormatted
+                        : 'يدعم ملفات PDF فقط',
+                    selectedFileName: _selectedFile?.fileName,
+                    onTap: _isLoading ? null : _selectFile,
+                  ),
                 ),
                 const SizedBox(height: 24),
                 if (!hasFile)
@@ -185,9 +161,8 @@ class _UploadPdfScreenState extends State<UploadPdfScreen> {
                   )
                 else
                   CustomButton(
-                    text: _isExtracting ? 'جاري استخراج النص...' : 'متابعة',
-                    onPressed: _isExtracting ? null : _extractTextAndNavigate,
-                    isLoading: _isExtracting,
+                    text: 'متابعة',
+                    onPressed: _navigateToOptions,
                   ),
                 const SizedBox(height: 32),
               ],
@@ -198,43 +173,4 @@ class _UploadPdfScreenState extends State<UploadPdfScreen> {
     );
   }
 
-  Widget _buildExtractingState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            width: 80,
-            height: 80,
-            decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.1),
-              shape: BoxShape.circle,
-            ),
-            child: const Center(
-              child: SizedBox(
-                width: 40,
-                height: 40,
-                child: CircularProgressIndicator(
-                  strokeWidth: 3,
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'جاري استخراج النص من الملف...',
-            style: AppTextStyles.titleMedium,
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _selectedFile?.fileName ?? '',
-            style: AppTextStyles.bodySmall,
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
-    );
-  }
 }

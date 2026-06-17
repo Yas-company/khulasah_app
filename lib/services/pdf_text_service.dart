@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
+import 'ocr_service.dart';
 
 /// Quality level of extracted text (internal rating only - never shown to user)
 enum TextQuality {
@@ -14,16 +15,14 @@ enum TextQuality {
   empty,
 }
 
-/// Content source for AI processing
+/// Content source for AI processing (internal only - never shown to user)
 enum ContentSource {
-  /// Text was extracted from PDF
+  /// Text was extracted from PDF directly
   extractedText,
+  /// Text was extracted via internal image processing (OCR)
+  ocrText,
   /// No content available
   empty,
-  // TODO: Future content sources
-  // visualPages - PDF pages rendered as images for vision AI
-  // ocrText - Text extracted via OCR from scanned PDFs
-  // directFile - PDF sent directly to AI that supports file processing
 }
 
 class PdfExtractionResult {
@@ -50,6 +49,7 @@ class PdfExtractionResult {
     required String originalText,
     required TextQuality quality,
     required double readableRatio,
+    ContentSource contentSource = ContentSource.extractedText,
   }) {
     return PdfExtractionResult._(
       text: cleanedText,
@@ -57,19 +57,30 @@ class PdfExtractionResult {
       success: true,
       quality: quality,
       readableRatio: readableRatio,
-      contentSource: ContentSource.extractedText,
+      contentSource: contentSource,
+    );
+  }
+
+  /// Result from internal image processing (OCR) fallback
+  factory PdfExtractionResult.fromOcr({
+    required String text,
+    required TextQuality quality,
+  }) {
+    return PdfExtractionResult._(
+      text: text,
+      originalText: text,
+      success: true,
+      quality: quality,
+      readableRatio: quality == TextQuality.high ? 0.9 : 0.6,
+      contentSource: ContentSource.ocrText,
     );
   }
 
   factory PdfExtractionResult.empty() {
-    // TODO: Future improvement - when text extraction fails completely:
-    // 1. Render PDF pages as images and send to vision-capable AI model
-    // 2. Add OCR fallback for scanned PDFs
-    // 3. Send PDF directly to AI providers that support file processing
     return const PdfExtractionResult._(
       text: '',
       originalText: '',
-      success: true, // Still success - let AI handle empty gracefully
+      success: true,
       quality: TextQuality.empty,
       readableRatio: 0.0,
       contentSource: ContentSource.empty,
@@ -124,10 +135,41 @@ class PdfPageCountResult {
   }
 }
 
+/// Result status for extraction with OCR fallback
+enum ExtractionStatus {
+  /// Text extracted successfully (either direct or OCR)
+  success,
+  /// Normal extraction returned empty, OCR fallback not attempted (too many pages)
+  tooManyPagesForOcr,
+  /// Both normal extraction and OCR fallback failed
+  failed,
+  /// File error (not found, invalid path, etc.)
+  fileError,
+}
+
+/// Extended result that includes OCR fallback status
+class ExtendedExtractionResult {
+  final PdfExtractionResult extractionResult;
+  final ExtractionStatus status;
+  final String? statusMessage;
+
+  const ExtendedExtractionResult({
+    required this.extractionResult,
+    required this.status,
+    this.statusMessage,
+  });
+
+  bool get hasText => extractionResult.hasText;
+  bool get isOcrSource => extractionResult.contentSource == ContentSource.ocrText;
+}
+
 class PdfTextService {
   // Quality thresholds (internal only - never block user based on these)
   static const double _highQualityThreshold = 0.70;
   static const double _mediumQualityThreshold = 0.40;
+
+  // OCR fallback limits (internal only)
+  static const int maxOcrPagesPerRequest = 10;
 
   /// Get the total page count of a PDF file
   Future<PdfPageCountResult> getPageCount(String? filePath) async {
@@ -477,5 +519,159 @@ class PdfTextService {
     cleaned = cleaned.replaceAll(RegExp(r'\n{4,}'), '\n\n\n');
 
     return cleaned.trim();
+  }
+
+  /// Extract text with automatic internal OCR fallback for scanned PDFs.
+  ///
+  /// Flow:
+  /// 1. Try normal text extraction first
+  /// 2. If text exists, return it with source 'extractedText'
+  /// 3. If empty and page count <= maxOcrPagesPerRequest, try internal OCR
+  /// 4. Return OCR text with source 'ocrText' if successful
+  /// 5. Return empty if OCR also fails
+  ///
+  /// Callbacks:
+  /// - [onNormalExtractionStart] called when starting normal extraction
+  /// - [onOcrFallbackStart] called when starting OCR fallback (for UI feedback)
+  /// - [onPageProcessed] called for each page during OCR (current, total)
+  Future<ExtendedExtractionResult> extractTextWithOcrFallback({
+    required String? filePath,
+    required int fromPage,
+    required int toPage,
+    void Function()? onNormalExtractionStart,
+    void Function()? onOcrFallbackStart,
+    void Function(int current, int total)? onPageProcessed,
+  }) async {
+    // Validate file path
+    if (filePath == null || filePath.isEmpty) {
+      debugPrint('[OCR] File path is null or empty');
+      return ExtendedExtractionResult(
+        extractionResult: PdfExtractionResult.noPath(),
+        status: ExtractionStatus.fileError,
+      );
+    }
+
+    final pageCount = toPage - fromPage + 1;
+    debugPrint('[OCR] Selected page count: $pageCount');
+    debugPrint('[OCR] OCR page limit: $maxOcrPagesPerRequest');
+
+    // Step 1: Try normal text extraction first
+    onNormalExtractionStart?.call();
+    debugPrint('[OCR] Attempting normal text extraction...');
+
+    final normalResult = await extractTextFromRange(filePath, fromPage, toPage);
+
+    // Check for file errors
+    if (!normalResult.success) {
+      debugPrint('[OCR] Normal extraction failed: ${normalResult.errorMessage}');
+      return ExtendedExtractionResult(
+        extractionResult: normalResult,
+        status: ExtractionStatus.fileError,
+        statusMessage: normalResult.errorMessage,
+      );
+    }
+
+    // Step 2: If text was extracted, return it
+    if (normalResult.hasText) {
+      debugPrint('[OCR] Normal extraction succeeded: ${normalResult.text!.length} chars');
+      return ExtendedExtractionResult(
+        extractionResult: normalResult,
+        status: ExtractionStatus.success,
+      );
+    }
+
+    // Step 3: Normal extraction returned empty - check if OCR is feasible
+    debugPrint('[OCR] Normal extraction empty');
+
+    if (pageCount > maxOcrPagesPerRequest) {
+      debugPrint('[OCR] Page count $pageCount exceeds OCR limit $maxOcrPagesPerRequest');
+      return ExtendedExtractionResult(
+        extractionResult: PdfExtractionResult.empty(),
+        status: ExtractionStatus.tooManyPagesForOcr,
+        statusMessage: 'Selected page count exceeds OCR limit',
+      );
+    }
+
+    // Step 4: Try internal OCR fallback
+    debugPrint('[OCR] Starting internal OCR fallback');
+    onOcrFallbackStart?.call();
+
+    try {
+      final ocrResult = await _performOcrFallback(
+        filePath: filePath,
+        fromPage: fromPage,
+        toPage: toPage,
+        onPageProcessed: onPageProcessed,
+      );
+
+      if (ocrResult.hasText) {
+        debugPrint('[OCR] OCR extracted chars: ${ocrResult.text!.length}');
+        return ExtendedExtractionResult(
+          extractionResult: ocrResult,
+          status: ExtractionStatus.success,
+        );
+      } else {
+        debugPrint('[OCR] OCR returned no text');
+        return ExtendedExtractionResult(
+          extractionResult: PdfExtractionResult.empty(),
+          status: ExtractionStatus.failed,
+          statusMessage: 'Could not extract text from pages',
+        );
+      }
+    } catch (e) {
+      debugPrint('[OCR] OCR failed: $e');
+      return ExtendedExtractionResult(
+        extractionResult: PdfExtractionResult.empty(),
+        status: ExtractionStatus.failed,
+        statusMessage: e.toString(),
+      );
+    }
+  }
+
+  /// Internal method to perform OCR on PDF pages using native PDFKit + Vision
+  Future<PdfExtractionResult> _performOcrFallback({
+    required String filePath,
+    required int fromPage,
+    required int toPage,
+    void Function(int current, int total)? onPageProcessed,
+  }) async {
+    final ocrService = OcrService.instance;
+
+    // Check if OCR is available
+    final isAvailable = await ocrService.isAvailable();
+    if (!isAvailable) {
+      debugPrint('[OCR] OCR unavailable on this device');
+      return PdfExtractionResult.empty();
+    }
+
+    // Use native PDFKit + Vision for PDF OCR (handles rendering internally)
+    debugPrint('[OCR] Calling native PDF OCR for pages $fromPage-$toPage');
+
+    final ocrResult = await ocrService.recognizeTextFromPdfPages(
+      filePath: filePath,
+      fromPage: fromPage,
+      toPage: toPage,
+    );
+
+    if (!ocrResult.success) {
+      debugPrint('[OCR] Native OCR failed: ${ocrResult.errorMessage}');
+      return PdfExtractionResult.empty();
+    }
+
+    if (!ocrResult.hasText) {
+      debugPrint('[OCR] Native OCR returned no text');
+      return PdfExtractionResult.empty();
+    }
+
+    // Clean and return OCR text
+    final cleanedText = _cleanText(ocrResult.text!);
+    final quality = cleanedText.length > 500 ? TextQuality.high : TextQuality.medium;
+
+    debugPrint('[OCR] Native OCR success: ${cleanedText.length} chars, quality: ${quality.name}');
+
+    return PdfExtractionResult.fromOcr(
+      text: cleanedText,
+      quality: quality,
+    );
   }
 }

@@ -28,11 +28,16 @@ class SummaryOptionsScreen extends StatefulWidget {
 
 class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     with SingleTickerProviderStateMixin {
+  // Large PDF protection constants
+  static const int _largePdfPageThreshold = 100;
+  static const int _maxPagesPerRequest = 50;
+
   int _selectedOutputType = 0;
   int _selectedLength = 0;
   int _selectedLanguage = 0;
   bool _isProcessing = true;
   bool _isExtracting = false;
+  String _extractionStatusMessage = '';
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
 
@@ -41,6 +46,9 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
   late TextEditingController _fromPageController;
   late TextEditingController _toPageController;
   String? _pageRangeError;
+
+  /// Whether this PDF is considered large (> threshold pages)
+  bool get _isLargePdf => widget.fileInfo.totalPages > _largePdfPageThreshold;
 
   // Subscription state
   UserPlan? _currentPlan;
@@ -79,10 +87,22 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     );
 
     // Initialize page range controllers
+    final totalPages = widget.fileInfo.totalPages;
     _fromPageController = TextEditingController(text: '1');
-    _toPageController = TextEditingController(
-      text: widget.fileInfo.totalPages > 0 ? '${widget.fileInfo.totalPages}' : '1',
-    );
+
+    // For large PDFs, default to max 50 pages; otherwise all pages
+    if (totalPages > _largePdfPageThreshold) {
+      _toPageController = TextEditingController(
+        text: '${totalPages > 0 ? (totalPages < _maxPagesPerRequest ? totalPages : _maxPagesPerRequest) : 1}',
+      );
+      // Auto-select custom range for large PDFs
+      _selectedPageRangeOption = 1;
+      debugPrint('[SummaryOptions] Large PDF detected ($totalPages pages). Auto-selecting custom range 1-${_toPageController.text}');
+    } else {
+      _toPageController = TextEditingController(
+        text: totalPages > 0 ? '$totalPages' : '1',
+      );
+    }
 
     // Log info (internal only)
     _logInfo();
@@ -199,7 +219,12 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
   /// Validate page range inputs
   bool _validatePageRange() {
     if (_selectedPageRangeOption == 0) {
-      // All pages selected - no validation needed
+      // All pages selected - but should not be allowed for large PDFs
+      if (_isLargePdf) {
+        _pageRangeError = 'يرجى اختيار نطاق صفحات محدد للملفات الكبيرة';
+        debugPrint('[SummaryOptions] Validation failed: all pages not allowed for large PDF');
+        return false;
+      }
       _pageRangeError = null;
       return true;
     }
@@ -231,6 +256,16 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     if (fromPage > toPage) {
       _pageRangeError = 'صفحة البداية يجب أن تكون أقل من صفحة النهاية';
       return false;
+    }
+
+    // For large PDFs, enforce max pages per request
+    if (_isLargePdf) {
+      final selectedPageCount = toPage - fromPage + 1;
+      if (selectedPageCount > _maxPagesPerRequest) {
+        _pageRangeError = 'يمكن تلخيص $_maxPagesPerRequest صفحة كحد أقصى في الطلب الواحد';
+        debugPrint('[SummaryOptions] Validation failed: $selectedPageCount pages > max $_maxPagesPerRequest');
+        return false;
+      }
     }
 
     _pageRangeError = null;
@@ -278,58 +313,111 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
 
     setState(() {
       _isExtracting = true;
+      _extractionStatusMessage = 'جاري قراءة محتوى الصفحات...';
     });
 
     try {
       // Determine page range
       final useCustomRange = _selectedPageRangeOption == 1;
-      final fromPage = useCustomRange ? int.parse(_fromPageController.text) : null;
-      final toPage = useCustomRange ? int.parse(_toPageController.text) : null;
+      final fromPage = useCustomRange ? int.parse(_fromPageController.text) : 1;
+      final toPage = useCustomRange ? int.parse(_toPageController.text) : widget.fileInfo.totalPages;
 
-      debugPrint('[SummaryOptions] Extracting pages: ${useCustomRange ? "$fromPage-$toPage" : "all"}');
+      final pageCount = toPage - fromPage + 1;
+      debugPrint('[SummaryOptions] Extracting pages: $fromPage-$toPage ($pageCount pages)');
+      debugPrint('[SummaryOptions] isLargePdf: $_isLargePdf, maxPagesPerRequest: $_maxPagesPerRequest');
 
-      // Extract text from selected page range
-      final result = await _pdfTextService.extractTextFromRange(
-        widget.fileInfo.filePath,
-        fromPage,
-        toPage,
+      // Extract text with automatic internal fallback for scanned PDFs
+      final extendedResult = await _pdfTextService.extractTextWithOcrFallback(
+        filePath: widget.fileInfo.filePath,
+        fromPage: fromPage,
+        toPage: toPage,
+        onNormalExtractionStart: () {
+          if (mounted) {
+            setState(() {
+              _extractionStatusMessage = 'جاري قراءة محتوى الصفحات...';
+            });
+          }
+        },
+        onOcrFallbackStart: () {
+          if (mounted) {
+            setState(() {
+              _extractionStatusMessage = 'يتم الآن معالجة الصفحات، قد يستغرق ذلك وقتًا أطول قليلًا.';
+            });
+          }
+        },
+        onPageProcessed: (current, total) {
+          debugPrint('[SummaryOptions] Processing page $current/$total');
+        },
       );
 
       if (!mounted) return;
 
-      // Update file info with extraction result and page range
-      final updatedFile = widget.fileInfo.copyWith(
-        extractedText: result.text,
-        textQuality: result.quality,
-        readableRatio: result.readableRatio,
-        errorMessage: result.errorMessage,
-        useCustomPageRange: useCustomRange,
-        selectedFromPage: fromPage ?? 1,
-        selectedToPage: toPage ?? widget.fileInfo.totalPages,
-      );
+      // Handle different extraction statuses
+      switch (extendedResult.status) {
+        case ExtractionStatus.success:
+          // Text was extracted successfully (either direct or via internal processing)
+          final result = extendedResult.extractionResult;
+          debugPrint('[SummaryOptions] Extraction success: ${result.text?.length ?? 0} chars');
+          debugPrint('[SummaryOptions] Content source: ${result.contentSource}');
 
-      debugPrint('[SummaryOptions] Extracted ${updatedFile.extractedTextLength} chars');
+          // Update file info with extraction result
+          final updatedFile = widget.fileInfo.copyWith(
+            extractedText: result.text,
+            textQuality: result.quality,
+            readableRatio: result.readableRatio,
+            errorMessage: result.errorMessage,
+            useCustomPageRange: useCustomRange,
+            selectedFromPage: fromPage,
+            selectedToPage: toPage,
+          );
 
-      final options = SummaryOptions(
-        outputTypeIndex: _selectedOutputType,
-        lengthIndex: _selectedLength,
-        outputLanguageIndex: _selectedLanguage,
-      );
+          final options = SummaryOptions(
+            outputTypeIndex: _selectedOutputType,
+            lengthIndex: _selectedLength,
+            outputLanguageIndex: _selectedLanguage,
+          );
 
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ResultScreen(
-            fileInfo: updatedFile,
-            options: options,
-          ),
-        ),
-      );
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ResultScreen(
+                fileInfo: updatedFile,
+                options: options,
+              ),
+            ),
+          );
+          break;
+
+        case ExtractionStatus.tooManyPagesForOcr:
+          // Normal extraction returned empty, but too many pages for internal processing
+          debugPrint('[SummaryOptions] Too many pages for internal processing');
+          await _showTooManyPagesDialog();
+          break;
+
+        case ExtractionStatus.failed:
+          // Both normal extraction and internal processing failed
+          debugPrint('[SummaryOptions] Extraction failed completely');
+          await _showExtractionFailedDialog();
+          break;
+
+        case ExtractionStatus.fileError:
+          // File error occurred
+          debugPrint('[SummaryOptions] File error: ${extendedResult.statusMessage}');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(extendedResult.statusMessage ?? 'حدث خطأ أثناء قراءة الملف'),
+                backgroundColor: AppColors.error,
+              ),
+            );
+          }
+          break;
+      }
     } catch (e) {
       debugPrint('[SummaryOptions] Extraction error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('حدث خطأ أثناء استخراج النص'),
+            content: Text('حدث خطأ أثناء قراءة الملف'),
             backgroundColor: AppColors.error,
           ),
         );
@@ -338,9 +426,146 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
       if (mounted) {
         setState(() {
           _isExtracting = false;
+          _extractionStatusMessage = '';
         });
       }
     }
+  }
+
+  /// Show dialog when selected pages exceed internal processing limit
+  Future<void> _showTooManyPagesDialog() async {
+    if (!mounted) return;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          backgroundColor: AppColors.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.info_outline,
+                  color: AppColors.accent,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'تعذر قراءة الصفحات',
+                  style: AppTextStyles.titleLarge,
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            'هذا الملف يحتاج معالجة أعمق. يرجى اختيار ${PdfTextService.maxOcrPagesPerRequest} صفحات كحد أقصى ثم المحاولة مرة أخرى.',
+            style: AppTextStyles.bodyMedium.copyWith(
+              color: AppColors.textSecondary,
+              height: 1.5,
+            ),
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: Text(
+                'حسنًا',
+                style: AppTextStyles.labelLarge.copyWith(
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Show dialog when both normal extraction and internal processing fail
+  Future<void> _showExtractionFailedDialog() async {
+    if (!mounted) return;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          backgroundColor: AppColors.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.error.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.error_outline,
+                  color: AppColors.error,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'تعذر قراءة الملف',
+                  style: AppTextStyles.titleLarge,
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            'لم نتمكن من قراءة نص واضح من الصفحات المحددة. جرّب اختيار صفحات أخرى أو استخدم ملف PDF أوضح.',
+            style: AppTextStyles.bodyMedium.copyWith(
+              color: AppColors.textSecondary,
+              height: 1.5,
+            ),
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: Text(
+                'حسنًا',
+                style: AppTextStyles.labelLarge.copyWith(
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -468,6 +693,43 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                 }),
                 const SizedBox(height: 32),
 
+                // Extraction status message
+                if (_isExtracting && _extractionStatusMessage.isNotEmpty) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.06),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.15),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            _extractionStatusMessage,
+                            style: AppTextStyles.bodyMedium.copyWith(
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+
                 // Generate button
                 PremiumButton(
                   text: 'إنشاء النتيجة',
@@ -487,6 +749,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
   Widget _buildPageRangeSection() {
     final totalPages = widget.fileInfo.totalPages;
     final hasTotalPages = totalPages > 0;
+    final isLargePdf = _isLargePdf;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -518,13 +781,60 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
         ),
         const SizedBox(height: 16),
 
-        // All pages option
+        // Large PDF warning
+        if (isLargePdf) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.accent.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: AppColors.accent.withValues(alpha: 0.3),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: AppColors.accent,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'هذا الملف كبير جدًا. يرجى اختيار نطاق صفحات محدد للتلخيص.',
+                        style: AppTextStyles.bodySmall.copyWith(
+                          color: AppColors.accent,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'يمكن تلخيص $_maxPagesPerRequest صفحة كحد أقصى في الطلب الواحد.',
+                  style: AppTextStyles.bodySmall.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+
+        // All pages option (disabled for large PDFs)
         OptionCard(
           icon: Icons.select_all,
           title: 'كل الصفحات',
           subtitle: hasTotalPages ? 'من 1 إلى $totalPages' : null,
-          isSelected: _selectedPageRangeOption == 0,
-          onTap: _isExtracting
+          isSelected: _selectedPageRangeOption == 0 && !isLargePdf,
+          onTap: (_isExtracting || isLargePdf)
               ? null
               : () {
                   AppFeedbackService.instance.selection();

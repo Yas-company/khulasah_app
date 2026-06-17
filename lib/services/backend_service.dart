@@ -92,7 +92,17 @@ class BackendService {
       );
     }
 
-    // Debug mode only: Fallback to local dummy generation
+    // Debug mode: If we have real text content (OCR or extracted), don't use dummy
+    // Only use dummy for testing when there's no meaningful content
+    final hasRealContent = textToSend.length > 100;
+    if (hasRealContent) {
+      debugPrint('[Backend] Debug mode - real content exists (${textToSend.length} chars), showing error instead of dummy');
+      return GeneratedResult.error(
+        'تعذر الاتصال بخدمة التلخيص. تأكد من اتصال الإنترنت وحاول مرة أخرى.',
+      );
+    }
+
+    // Debug mode only: Fallback to local dummy generation (for testing without content)
     debugPrint('[Backend] Debug mode - using local dummy fallback...');
     final result = await _generateLocalDummyResult(fileInfo, options);
     debugPrint('[Backend] Local dummy result generated');
@@ -155,6 +165,11 @@ class BackendService {
           .timeout(const Duration(seconds: 60));
 
       debugPrint('[Backend] Response status: ${response.statusCode}');
+      debugPrint('[Backend] Response body length: ${response.body.length}');
+
+      if (response.statusCode != 200) {
+        debugPrint('[Backend] Error response body: ${response.body.substring(0, response.body.length > 500 ? 500 : response.body.length)}');
+      }
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
