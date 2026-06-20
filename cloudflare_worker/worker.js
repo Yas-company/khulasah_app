@@ -50,7 +50,16 @@ async function handleGenerateResult(request, env) {
     return jsonResponse({ success: false, error: 'Invalid JSON body' }, 400);
   }
 
-  const { extractedText, outputType, summaryLength, outputLanguage, fileName } = body;
+  const {
+    extractedText,
+    outputType,
+    summaryLength,
+    outputLanguage,
+    fileName,
+    mode = 'single',
+    targetWords,
+    targetPages,
+  } = body;
 
   // Validate required fields
   if (!extractedText) {
@@ -65,14 +74,39 @@ async function handleGenerateResult(request, env) {
   }
 
   const lang = outputLanguage || 'ar';
+  const validModes = ['single', 'partial', 'final'];
+  if (!validModes.includes(mode)) {
+    return jsonResponse({ success: false, error: 'Invalid mode' }, 400);
+  }
+
   console.log(`[Generate] Processing file: ${fileName || 'unknown'}`);
+  console.log(`[Generate] Mode: ${mode}`);
   console.log(`[Generate] Output type: ${outputType}, Length: ${summaryLength}, Language: ${lang}`);
   console.log(`[Generate] Text length: ${extractedText.length} characters`);
+  console.log(`[Worker] summaryLength: ${summaryLength}`);
+  console.log(`[Worker] targetWords: ${targetWords || 'not-set'}`);
 
   try {
     // Build the prompt based on output type and language
-    const prompt = buildPrompt(extractedText, outputType, summaryLength, lang);
-    const systemPrompt = getSystemPrompt(lang);
+    const prompt = buildPrompt(
+      extractedText,
+      outputType,
+      summaryLength,
+      lang,
+      mode,
+      targetWords,
+      targetPages,
+    );
+    const systemPrompt = getSystemPrompt(lang, mode);
+    const requestedMaxTokens = getMaxTokens(
+      mode,
+      outputType,
+      summaryLength,
+      targetWords,
+    );
+    const configuredCap = Number(env.OPENROUTER_MAX_TOKENS || requestedMaxTokens);
+    const maxTokens = Math.min(requestedMaxTokens, configuredCap);
+    console.log(`[Worker] maxTokens: ${maxTokens}`);
 
     console.log('[Generate] Calling OpenRouter API...');
 
@@ -92,7 +126,7 @@ async function handleGenerateResult(request, env) {
           { role: 'user', content: prompt },
         ],
         temperature: 0.7,
-        max_tokens: 4000,
+        max_tokens: maxTokens,
       }),
     });
 
@@ -129,17 +163,24 @@ async function handleGenerateResult(request, env) {
 /**
  * Get the system prompt for the AI based on output language
  */
-function getSystemPrompt(language) {
+function getSystemPrompt(language, mode) {
+  const modeRule = mode === 'partial'
+    ? 'Return one information-rich section summary. Do not generate questions.'
+    : mode === 'final'
+      ? 'Create the final user-facing result from ordered summaries covering the complete document.'
+      : 'Create the requested result from the provided document text.';
+
   if (language === 'en') {
     return `You are an intelligent assistant specialized in summarizing texts and generating questions and answers in English.
 
 Important rules:
 1. All responses must be in English only.
-2. Write the summary clearly and organized.
-3. Extract the main ideas from the text.
+2. ${modeRule}
+3. Write clearly with descriptive headings and organized sections.
 4. If asked for questions, write useful questions with accurate answers.
 5. The response must be in JSON format only without any additional text.
 6. Do not mention any technical details or service names.
+7. Preserve arguments, evidence, definitions, examples, important figures, conclusions, and practical implications.
 
 Required response format:
 {
@@ -150,16 +191,22 @@ Required response format:
 }`;
   }
 
-  // Default: Arabic
+  const arabicModeRule = mode === 'partial'
+    ? 'أنشئ ملخصًا جزئيًا غنيًا بالمعلومات، ولا تنشئ أسئلة.'
+    : mode === 'final'
+      ? 'أنشئ النتيجة النهائية للمستخدم من الملخصات المرتبة التي تغطي المستند كاملًا.'
+      : 'أنشئ النتيجة المطلوبة من نص المستند المقدم.';
+
   return `أنت مساعد ذكي متخصص في تلخيص النصوص وإنشاء الأسئلة والأجوبة باللغة العربية.
 
 قواعد مهمة:
 1. يجب أن تكون جميع الإجابات باللغة العربية فقط.
-2. اكتب الملخص بشكل واضح ومنظم.
-3. استخرج الأفكار الرئيسية من النص.
+2. ${arabicModeRule}
+3. اكتب بعناوين واضحة وأقسام منظمة.
 4. إذا طُلب منك أسئلة، اكتب أسئلة مفيدة مع إجابات دقيقة.
 5. يجب أن يكون الرد بصيغة JSON فقط بدون أي نص إضافي.
 6. لا تذكر أي تفاصيل تقنية أو أسماء خدمات.
+7. حافظ على الحجج والأدلة والتعريفات والأمثلة والأرقام المهمة والاستنتاجات والتطبيقات العملية.
 
 صيغة الرد المطلوبة:
 {
@@ -173,48 +220,89 @@ Required response format:
 /**
  * Build the user prompt based on output type, length, and language
  */
-function buildPrompt(text, outputType, summaryLength, language) {
-  // Truncate text if too long (keep first 15000 chars)
-  const maxLength = 15000;
-  const truncatedText = text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
-
+function buildPrompt(
+  text,
+  outputType,
+  summaryLength,
+  language,
+  mode,
+  targetWords,
+  targetPages,
+) {
   if (language === 'en') {
-    return buildEnglishPrompt(truncatedText, outputType, summaryLength);
+    return buildEnglishPrompt(
+      text,
+      outputType,
+      summaryLength,
+      mode,
+      targetWords,
+      targetPages,
+    );
   }
 
-  // Default: Arabic
-  return buildArabicPrompt(truncatedText, outputType, summaryLength);
+  return buildArabicPrompt(
+    text,
+    outputType,
+    summaryLength,
+    mode,
+    targetWords,
+    targetPages,
+  );
 }
 
 /**
  * Build English prompt
  */
-function buildEnglishPrompt(text, outputType, summaryLength) {
-  // Determine summary length description
-  let lengthDesc = 'medium length';
-  if (summaryLength === 'short') {
-    lengthDesc = 'short and concise (3-5 paragraphs)';
-  } else if (summaryLength === 'long') {
-    lengthDesc = 'long and detailed (8-12 paragraphs)';
-  } else {
-    lengthDesc = 'medium length (5-8 paragraphs)';
+function buildEnglishPrompt(
+  text,
+  outputType,
+  summaryLength,
+  mode,
+  targetWords,
+  targetPages,
+) {
+  const targetInstruction = getEnglishTargetInstruction(
+    targetWords,
+    targetPages,
+  );
+
+  if (mode === 'partial') {
+    return `Create a concise but information-rich analytical summary of this section.
+Preserve key ideas, evidence, definitions, examples, important figures, and conclusions.
+${targetInstruction}
+Return JSON only:
+{"summary": "Detailed section summary", "questionsAndAnswers": []}
+
+Section text:
+${text}`;
   }
+
+  const lengthDesc = getEnglishLengthDescription(summaryLength);
+  const finalRule = mode === 'final'
+    ? `The input contains ordered summaries covering the complete document. Synthesize them into one coherent ${lengthDesc} result. Connect ideas across sections, remove repetition, and do not describe the input as partial summaries.`
+    : `Create a ${lengthDesc} result from the document text.`;
 
   let instruction = '';
 
   if (outputType === 'summaryOnly') {
-    instruction = `Summarize the following text in a ${lengthDesc} format.
+    instruction = `${finalRule}
+${targetInstruction}
+Use structured sections covering the overview, central themes, important details, evidence or examples, implications, and conclusion.
+If the source is shorter than the requested length, remain naturally detailed without inventing information.
 
 Return the response in JSON format as follows:
 {"summary": "Summary here", "questionsAndAnswers": []}`;
   } else if (outputType === 'questionsOnly') {
-    instruction = `Generate 5-7 important questions with their answers from the following text.
+    instruction = `${finalRule}
+Generate exactly 5 important questions with accurate, substantive answers.
 
 Return the response in JSON format as follows:
 {"summary": "", "questionsAndAnswers": [{"question": "Question", "answer": "Answer"}]}`;
   } else {
-    // summaryAndQuestions
-    instruction = `Summarize the following text in a ${lengthDesc} format, then generate 5-7 important questions with their answers.
+    instruction = `${finalRule}
+${targetInstruction}
+Use structured sections, then generate exactly 5 important questions with accurate, substantive answers.
+If the source is shorter than the requested length, remain naturally detailed without inventing information.
 
 Return the response in JSON format as follows:
 {"summary": "Summary here", "questionsAndAnswers": [{"question": "Question", "answer": "Answer"}]}`;
@@ -229,32 +317,56 @@ ${text}`;
 /**
  * Build Arabic prompt
  */
-function buildArabicPrompt(text, outputType, summaryLength) {
-  // Determine summary length description
-  let lengthDesc = 'متوسط الطول';
-  if (summaryLength === 'short') {
-    lengthDesc = 'قصير ومختصر (3-5 فقرات)';
-  } else if (summaryLength === 'long') {
-    lengthDesc = 'طويل ومفصل (8-12 فقرة)';
-  } else {
-    lengthDesc = 'متوسط الطول (5-8 فقرات)';
+function buildArabicPrompt(
+  text,
+  outputType,
+  summaryLength,
+  mode,
+  targetWords,
+  targetPages,
+) {
+  const targetInstruction = getArabicTargetInstruction(
+    targetWords,
+    targetPages,
+  );
+
+  if (mode === 'partial') {
+    return `أنشئ ملخصًا تحليليًا موجزًا لكنه غني بالمعلومات لهذا الجزء.
+حافظ على الأفكار الأساسية والأدلة والتعريفات والأمثلة والأرقام المهمة والاستنتاجات.
+${targetInstruction}
+أعد JSON فقط:
+{"summary": "ملخص تفصيلي للجزء", "questionsAndAnswers": []}
+
+نص الجزء:
+${text}`;
   }
+
+  const lengthDesc = getArabicLengthDescription(summaryLength);
+  const finalRule = mode === 'final'
+    ? `المدخل يحتوي على ملخصات مرتبة تغطي المستند كاملًا. ادمجها في نتيجة واحدة مترابطة ${lengthDesc}، واربط الأفكار بين الأقسام، واحذف التكرار، ولا تصف المدخل بأنه ملخصات جزئية.`
+    : `أنشئ نتيجة ${lengthDesc} من نص المستند.`;
 
   let instruction = '';
 
   if (outputType === 'summaryOnly') {
-    instruction = `قم بتلخيص النص التالي بشكل ${lengthDesc}.
+    instruction = `${finalRule}
+${targetInstruction}
+استخدم أقسامًا منظمة تشمل النظرة العامة، والأفكار المحورية، والتفاصيل المهمة، والأدلة أو الأمثلة، والآثار أو التطبيقات، والخاتمة.
+إذا كان المصدر أقصر من الطول المطلوب، فاكتب ملخصًا مفصلًا بطبيعية دون اختلاق معلومات.
 
 أعد الرد بصيغة JSON كالتالي:
 {"summary": "الملخص هنا", "questionsAndAnswers": []}`;
   } else if (outputType === 'questionsOnly') {
-    instruction = `قم بإنشاء 5-7 أسئلة مهمة مع إجاباتها من النص التالي.
+    instruction = `${finalRule}
+أنشئ 5 أسئلة مهمة بالضبط مع إجابات دقيقة وغنية بالمعلومات.
 
 أعد الرد بصيغة JSON كالتالي:
 {"summary": "", "questionsAndAnswers": [{"question": "السؤال", "answer": "الجواب"}]}`;
   } else {
-    // summaryAndQuestions
-    instruction = `قم بتلخيص النص التالي بشكل ${lengthDesc}، ثم أنشئ 5-7 أسئلة مهمة مع إجاباتها.
+    instruction = `${finalRule}
+${targetInstruction}
+استخدم أقسامًا منظمة، ثم أنشئ 5 أسئلة مهمة بالضبط مع إجابات دقيقة وغنية بالمعلومات.
+إذا كان المصدر أقصر من الطول المطلوب، فاكتب ملخصًا مفصلًا بطبيعية دون اختلاق معلومات.
 
 أعد الرد بصيغة JSON كالتالي:
 {"summary": "الملخص هنا", "questionsAndAnswers": [{"question": "السؤال", "answer": "الجواب"}]}`;
@@ -264,6 +376,69 @@ function buildArabicPrompt(text, outputType, summaryLength) {
 
 النص:
 ${text}`;
+}
+
+function getEnglishLengthDescription(summaryLength) {
+  if (summaryLength === 'onePage') {
+    return 'concise but complete, roughly one page';
+  }
+  if (summaryLength === 'tenPages') {
+    return 'deep and highly detailed, with substantial structured sections';
+  }
+  if (summaryLength === 'custom') {
+    return 'deep and detailed, following the breadth of the source material';
+  }
+  return 'detailed, with multiple well-developed sections';
+}
+
+function getArabicLengthDescription(summaryLength) {
+  if (summaryLength === 'onePage') {
+    return 'موجزة لكنها مكتملة بما يقارب صفحة واحدة';
+  }
+  if (summaryLength === 'tenPages') {
+    return 'عميقة وشديدة التفصيل مع أقسام منظمة وموسعة';
+  }
+  if (summaryLength === 'custom') {
+    return 'عميقة ومفصلة بما يتناسب مع اتساع المحتوى';
+  }
+  return 'مفصلة مع عدة أقسام مكتملة';
+}
+
+function getEnglishTargetInstruction(targetWords, targetPages) {
+  if (!targetWords) return '';
+  const pagesText = targetPages ? ` (approximately ${targetPages} pages)` : '';
+  return `Write a summary close to ${targetWords} words as much as possible${pagesText}, with clear organization and subheadings when useful.`;
+}
+
+function getArabicTargetInstruction(targetWords, targetPages) {
+  if (!targetWords) return '';
+  const pagesText = targetPages ? ` (ما يقارب ${targetPages} صفحات)` : '';
+  return `اكتب ملخصًا قريبًا من ${targetWords} كلمة قدر الإمكان${pagesText}، مع تنظيم واضح وعناوين فرعية عند الحاجة.`;
+}
+
+function getMaxTokens(mode, outputType, summaryLength, targetWords) {
+  if (mode === 'partial') {
+    return targetWords && targetWords >= 850 ? 1400 : 1100;
+  }
+  if (outputType === 'questionsOnly') {
+    return 1500;
+  }
+  if (outputType === 'summaryAndQuestions') {
+    if (summaryLength === 'onePage') return 1800;
+    if (summaryLength === 'fivePages') return 3500;
+    if (summaryLength === 'tenPages') return 6500;
+    return clampTokenEstimate(targetWords, 1800, 6500, 800);
+  }
+  if (summaryLength === 'onePage') return 1200;
+  if (summaryLength === 'fivePages') return 3000;
+  if (summaryLength === 'tenPages') return 6000;
+  return clampTokenEstimate(targetWords, 1200, 6000, 300);
+}
+
+function clampTokenEstimate(targetWords, minimum, maximum, fallbackWords) {
+  const words = Number(targetWords || fallbackWords);
+  const estimatedTokens = Math.ceil(words * 1.6);
+  return Math.max(minimum, Math.min(maximum, estimatedTokens));
 }
 
 /**
@@ -296,11 +471,19 @@ function parseAIResponse(content, outputType) {
       resultType = 'summaryAndQuestions';
     }
 
+    const questions = Array.isArray(parsed.questionsAndAnswers)
+      ? parsed.questionsAndAnswers
+      : [];
+    const normalizedQuestions = outputType === 'summaryAndQuestions' ||
+      outputType === 'questionsOnly'
+      ? questions.slice(0, 5)
+      : [];
+
     return {
       success: true,
       resultType: resultType,
       summary: parsed.summary || '',
-      questionsAndAnswers: parsed.questionsAndAnswers || [],
+      questionsAndAnswers: normalizedQuestions,
     };
   } catch (error) {
     console.log(`[Parse] Error parsing AI response: ${error.message}`);

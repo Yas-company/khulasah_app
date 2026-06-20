@@ -6,6 +6,7 @@ import '../services/app_feedback_service.dart';
 import '../services/auth_service.dart';
 import '../services/backend_service.dart';
 import '../services/firestore_service.dart';
+import '../services/large_document_processor.dart';
 import '../services/pdf_export_service.dart';
 import '../services/subscription_service.dart';
 import '../utils/app_colors.dart';
@@ -34,16 +35,30 @@ class _ResultScreenState extends State<ResultScreen> {
   final AuthService _authService = AuthService.instance;
   final PdfExportService _pdfExportService = PdfExportService.instance;
   final SubscriptionService _subscriptionService = SubscriptionService.instance;
+  late final LargeDocumentProcessor _largeDocumentProcessor;
+  LargeDocumentCancellationToken? _cancellationToken;
 
   bool _isLoading = true;
   bool _isSaving = false;
   bool _isExporting = false;
   GeneratedResult? _result;
   String? _errorMessage;
+  String _loadingMessage = 'جاري إنشاء النتيجة...';
+  double? _loadingProgress;
+
+  bool get _usesLargeDocumentFlow {
+    final selectedPages =
+        widget.fileInfo.actualToPage - widget.fileInfo.actualFromPage + 1;
+    return widget.fileInfo.requiresLargeProcessing ||
+        selectedPages > LargeDocumentProcessor.largeRangeThreshold;
+  }
 
   @override
   void initState() {
     super.initState();
+    _largeDocumentProcessor = LargeDocumentProcessor(
+      backendService: _backendService,
+    );
     _generateResult();
   }
 
@@ -51,13 +66,51 @@ class _ResultScreenState extends State<ResultScreen> {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
+      _loadingMessage = 'جاري إنشاء النتيجة...';
+      _loadingProgress = null;
     });
 
     try {
-      final result = await _backendService.generateResult(
-        fileInfo: widget.fileInfo,
-        options: widget.options,
-      );
+      final GeneratedResult result;
+      if (_usesLargeDocumentFlow) {
+        final filePath = widget.fileInfo.filePath;
+        if (filePath == null || filePath.isEmpty) {
+          result = GeneratedResult.error('مسار الملف غير متوفر');
+        } else {
+          _cancellationToken = LargeDocumentCancellationToken();
+          result = await _largeDocumentProcessor.process(
+            filePath: filePath,
+            fileName: widget.fileInfo.fileName,
+            totalPages: widget.fileInfo.totalPages,
+            fromPage: widget.fileInfo.actualFromPage,
+            toPage: widget.fileInfo.actualToPage,
+            outputType: _outputTypeValue,
+            summaryLength: widget.options.summaryLength,
+            targetWords: widget.options.targetWords,
+            targetPages: widget.options.targetPages,
+            outputLanguage: widget.options.outputLanguageCode,
+            cancellationToken: _cancellationToken!,
+            onProgress: (progress) {
+              if (mounted) {
+                setState(() {
+                  _loadingMessage = progress.message;
+                  _loadingProgress = progress.fraction;
+                });
+              }
+            },
+          );
+        }
+      } else {
+        result = await _backendService.generateResult(
+          fileInfo: widget.fileInfo,
+          options: widget.options,
+          onProgress: (message) {
+            if (mounted) {
+              setState(() => _loadingMessage = message);
+            }
+          },
+        );
+      }
 
       if (!mounted) return;
 
@@ -82,6 +135,9 @@ class _ResultScreenState extends State<ResultScreen> {
           _isLoading = false;
         });
       }
+    } on LargeDocumentCancelledException {
+      if (!mounted) return;
+      Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
       await AppFeedbackService.instance.error();
@@ -90,6 +146,22 @@ class _ResultScreenState extends State<ResultScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  String get _outputTypeValue {
+    const values = {
+      0: 'summaryOnly',
+      1: 'questionsOnly',
+      2: 'summaryAndQuestions',
+    };
+    return values[widget.options.outputTypeIndex] ?? 'summaryOnly';
+  }
+
+  void _cancelLargeDocumentProcessing() {
+    _cancellationToken?.cancel();
+    setState(() {
+      _loadingMessage = 'جاري الإلغاء...';
+    });
   }
 
   /// Increment usage counter after successful generation
@@ -117,14 +189,12 @@ class _ResultScreenState extends State<ResultScreen> {
     }
 
     final outputTypeMap = {0: 'summary', 1: 'qa', 2: 'both'};
-    final lengthMap = {0: 'short', 1: 'medium', 2: 'long', 3: 'custom'};
-
     final docId = await _firestoreService.saveDocumentHistory(
       fileName: widget.fileInfo.fileName,
       fileSize: widget.fileInfo.fileSize ?? 0,
       extractedTextLength: widget.fileInfo.extractedText?.length ?? 0,
       outputType: outputTypeMap[widget.options.outputTypeIndex] ?? 'summary',
-      summaryLength: lengthMap[widget.options.lengthIndex] ?? 'medium',
+      summaryLength: widget.options.summaryLength,
       outputLanguage: widget.options.outputLanguageCode,
       totalPages: widget.fileInfo.totalPages,
       fromPage: widget.fileInfo.actualFromPage,
@@ -157,8 +227,6 @@ class _ResultScreenState extends State<ResultScreen> {
     debugPrint('Save result started');
 
     final outputTypeMap = {0: 'summary', 1: 'qa', 2: 'both'};
-    final lengthMap = {0: 'short', 1: 'medium', 2: 'long', 3: 'custom'};
-
     // Convert Q&A to list of maps
     List<Map<String, String>>? qaList;
     if (_result!.hasQuestions) {
@@ -172,7 +240,7 @@ class _ResultScreenState extends State<ResultScreen> {
       fileSize: widget.fileInfo.fileSize ?? 0,
       extractedTextLength: widget.fileInfo.extractedText?.length ?? 0,
       outputType: outputTypeMap[widget.options.outputTypeIndex] ?? 'summary',
-      summaryLength: lengthMap[widget.options.lengthIndex] ?? 'medium',
+      summaryLength: widget.options.summaryLength,
       outputLanguage: widget.options.outputLanguageCode,
       generatedSummary: _result!.summary,
       questionsAndAnswers: qaList,
@@ -210,19 +278,26 @@ class _ResultScreenState extends State<ResultScreen> {
   Future<void> _exportPdf() async {
     // Prevent double-click
     if (_isExporting || _result == null) {
-      debugPrint('[ResultScreen] Export blocked - already exporting or no result');
+      debugPrint(
+        '[ResultScreen] Export blocked - already exporting or no result',
+      );
       return;
     }
 
     setState(() => _isExporting = true);
     debugPrint('[ResultScreen] Starting PDF export...');
 
-    final outputTypeMap = {0: 'summaryOnly', 1: 'questionsOnly', 2: 'summaryAndQuestions'};
+    final outputTypeMap = {
+      0: 'summaryOnly',
+      1: 'questionsOnly',
+      2: 'summaryAndQuestions',
+    };
     final lengthMap = {0: 'short', 1: 'medium', 2: 'long', 3: 'medium'};
 
     final success = await _pdfExportService.exportAndShare(
       fileName: widget.fileInfo.fileName,
-      outputType: outputTypeMap[widget.options.outputTypeIndex] ?? 'summaryOnly',
+      outputType:
+          outputTypeMap[widget.options.outputTypeIndex] ?? 'summaryOnly',
       summaryLength: lengthMap[widget.options.lengthIndex] ?? 'medium',
       outputLanguage: widget.options.outputLanguageCode,
       result: _result!,
@@ -259,20 +334,23 @@ class _ResultScreenState extends State<ResultScreen> {
           elevation: 0,
           leading: IconButton(
             icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () {
+              if (_isLoading && _usesLargeDocumentFlow) {
+                _cancelLargeDocumentProcessing();
+              } else {
+                Navigator.of(context).pop();
+              }
+            },
           ),
-          title: Text(
-            'النتيجة',
-            style: AppTextStyles.headlineSmall,
-          ),
+          title: Text('النتيجة', style: AppTextStyles.headlineSmall),
           centerTitle: true,
         ),
         body: SafeArea(
           child: _isLoading
               ? _buildLoadingState()
               : _errorMessage != null
-                  ? _buildErrorState()
-                  : _buildResultContent(),
+              ? _buildErrorState()
+              : _buildResultContent(),
         ),
       ),
     );
@@ -287,10 +365,27 @@ class _ResultScreenState extends State<ResultScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               AnimatedLoadingIndicator(
-                message: 'جاري إنشاء النتيجة...',
+                message: _loadingMessage,
                 color: AppColors.primary,
                 size: 56,
               ),
+              if (_loadingProgress != null) ...[
+                const SizedBox(height: 20),
+                LinearProgressIndicator(
+                  value: _loadingProgress,
+                  minHeight: 6,
+                  borderRadius: BorderRadius.circular(8),
+                  color: AppColors.primary,
+                  backgroundColor: AppColors.border,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '${(_loadingProgress! * 100).round()}%',
+                  style: AppTextStyles.bodySmall.copyWith(
+                    color: AppColors.primary,
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               Text(
                 widget.fileInfo.fileName,
@@ -305,6 +400,21 @@ class _ResultScreenState extends State<ResultScreen> {
                 ),
                 textAlign: TextAlign.center,
               ),
+              if (_usesLargeDocumentFlow) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'يرجى إبقاء التطبيق مفتوحًا أثناء معالجة الملفات الكبيرة.',
+                  style: AppTextStyles.bodySmall.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                TextButton(
+                  onPressed: _cancelLargeDocumentProcessing,
+                  child: const Text('إلغاء'),
+                ),
+              ],
             ],
           ),
         ),
@@ -381,155 +491,155 @@ class _ResultScreenState extends State<ResultScreen> {
             const SizedBox(height: 24),
             Expanded(
               child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.border),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // File info chip
-                    _buildInfoChip(
-                      icon: Icons.description,
-                      label: widget.fileInfo.fileName,
-                      color: AppColors.primary,
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppColors.border),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.04),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
                     ),
-                    const SizedBox(height: 12),
-                    // Options row
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _buildInfoChip(
-                          icon: Icons.category,
-                          label: widget.options.outputTypeLabel,
-                          color: AppColors.secondary,
-                        ),
-                        _buildInfoChip(
-                          icon: Icons.format_size,
-                          label: widget.options.lengthLabel,
-                          color: AppColors.accent,
-                        ),
-                        _buildInfoChip(
-                          icon: Icons.language,
-                          label: widget.options.outputLanguageLabel,
-                          color: AppColors.primary,
-                        ),
-                        _buildInfoChip(
-                          icon: Icons.auto_stories,
-                          label: widget.fileInfo.pageRangeLabelShort,
-                          color: AppColors.textSecondary,
+                  ],
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // File info chip
+                      _buildInfoChip(
+                        icon: Icons.description,
+                        label: widget.fileInfo.fileName,
+                        color: AppColors.primary,
+                      ),
+                      const SizedBox(height: 12),
+                      // Options row
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _buildInfoChip(
+                            icon: Icons.category,
+                            label: widget.options.outputTypeLabel,
+                            color: AppColors.secondary,
+                          ),
+                          _buildInfoChip(
+                            icon: Icons.format_size,
+                            label: widget.options.lengthLabel,
+                            color: AppColors.accent,
+                          ),
+                          _buildInfoChip(
+                            icon: Icons.language,
+                            label: widget.options.outputLanguageLabel,
+                            color: AppColors.primary,
+                          ),
+                          _buildInfoChip(
+                            icon: Icons.auto_stories,
+                            label: widget.fileInfo.pageRangeLabelShort,
+                            color: AppColors.textSecondary,
+                          ),
+                        ],
+                      ),
+                      if (widget.fileInfo.fileSizeFormatted.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'حجم الملف: ${widget.fileInfo.fileSizeFormatted}',
+                          style: AppTextStyles.bodySmall,
                         ),
                       ],
-                    ),
-                    if (widget.fileInfo.fileSizeFormatted.isNotEmpty) ...[
-                      const SizedBox(height: 8),
+                      // Page range info
+                      const SizedBox(height: 4),
                       Text(
-                        'حجم الملف: ${widget.fileInfo.fileSizeFormatted}',
+                        'نطاق الصفحات: ${widget.fileInfo.pageRangeLabel}',
                         style: AppTextStyles.bodySmall,
                       ),
-                    ],
-                    // Page range info
-                    const SizedBox(height: 4),
-                    Text(
-                      'نطاق الصفحات: ${widget.fileInfo.pageRangeLabel}',
-                      style: AppTextStyles.bodySmall,
-                    ),
-                    const SizedBox(height: 24),
-                    const Divider(color: AppColors.border),
-                    const SizedBox(height: 20),
-                    // Generated result sections
-                    if (_result != null) ...[
-                      // Summary section
-                      if (_result!.hasSummary) ...[
-                        _buildSectionTitle(
-                          icon: Icons.summarize,
-                          title: 'الملخص',
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          _result!.summary!,
-                          style: AppTextStyles.bodyMedium.copyWith(
-                            height: 1.8,
-                          ),
-                        ),
-                      ],
-                      // Q&A section
-                      if (_result!.hasQuestions) ...[
+                      const SizedBox(height: 24),
+                      const Divider(color: AppColors.border),
+                      const SizedBox(height: 20),
+                      // Generated result sections
+                      if (_result != null) ...[
+                        // Summary section
                         if (_result!.hasSummary) ...[
-                          const SizedBox(height: 24),
-                          const Divider(color: AppColors.border),
-                          const SizedBox(height: 20),
-                        ],
-                        _buildSectionTitle(
-                          icon: Icons.quiz,
-                          title: 'الأسئلة والأجوبة',
-                        ),
-                        const SizedBox(height: 16),
-                        ..._result!.questionsAndAnswers!.asMap().entries.map(
-                          (entry) => _buildQuestionAnswerCard(
-                            index: entry.key + 1,
-                            qa: entry.value,
+                          _buildSectionTitle(
+                            icon: Icons.summarize,
+                            title: 'الملخص',
                           ),
-                        ),
+                          const SizedBox(height: 12),
+                          Text(
+                            _result!.summary!,
+                            style: AppTextStyles.bodyMedium.copyWith(
+                              height: 1.8,
+                            ),
+                          ),
+                        ],
+                        // Q&A section
+                        if (_result!.hasQuestions) ...[
+                          if (_result!.hasSummary) ...[
+                            const SizedBox(height: 24),
+                            const Divider(color: AppColors.border),
+                            const SizedBox(height: 20),
+                          ],
+                          _buildSectionTitle(
+                            icon: Icons.quiz,
+                            title: 'الأسئلة والأجوبة',
+                          ),
+                          const SizedBox(height: 16),
+                          ..._result!.questionsAndAnswers!.asMap().entries.map(
+                            (entry) => _buildQuestionAnswerCard(
+                              index: entry.key + 1,
+                              qa: entry.value,
+                            ),
+                          ),
+                        ],
                       ],
                     ],
-                  ],
+                  ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(height: 24),
-          // Action buttons
-          Row(
-            children: [
-              Expanded(
-                child: _buildActionButton(
-                  text: _isExporting ? 'جاري التصدير...' : 'تحميل PDF',
-                  icon: _isExporting ? null : Icons.download,
-                  isLoading: _isExporting,
-                  onPressed: (_isExporting || _isSaving) ? null : _exportPdf,
-                  isOutlined: true,
+            const SizedBox(height: 24),
+            // Action buttons
+            Row(
+              children: [
+                Expanded(
+                  child: _buildActionButton(
+                    text: _isExporting ? 'جاري التصدير...' : 'تحميل PDF',
+                    icon: _isExporting ? null : Icons.download,
+                    isLoading: _isExporting,
+                    onPressed: (_isExporting || _isSaving) ? null : _exportPdf,
+                    isOutlined: true,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildActionButton(
-                  text: _isSaving ? 'جاري الحفظ...' : 'حفظ النتيجة',
-                  icon: _isSaving ? null : Icons.save,
-                  isLoading: _isSaving,
-                  onPressed: (_isSaving || _isExporting) ? null : _saveResult,
-                  isOutlined: false,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildActionButton(
+                    text: _isSaving ? 'جاري الحفظ...' : 'حفظ النتيجة',
+                    icon: _isSaving ? null : Icons.save,
+                    isLoading: _isSaving,
+                    onPressed: (_isSaving || _isExporting) ? null : _saveResult,
+                    isOutlined: false,
+                  ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          PremiumButton(
-            text: 'العودة للرئيسية',
-            onPressed: () {
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const HomeScreen()),
-                (route) => false,
-              );
-            },
-            isOutlined: true,
-            icon: Icons.home_rounded,
-          ),
-          const SizedBox(height: 32),
-        ],
-      ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            PremiumButton(
+              text: 'العودة للرئيسية',
+              onPressed: () {
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const HomeScreen()),
+                  (route) => false,
+                );
+              },
+              isOutlined: true,
+              icon: Icons.home_rounded,
+            ),
+            const SizedBox(height: 32),
+          ],
+        ),
       ),
     );
   }
@@ -584,23 +694,14 @@ class _ResultScreenState extends State<ResultScreen> {
     );
   }
 
-  Widget _buildSectionTitle({
-    required IconData icon,
-    required String title,
-  }) {
+  Widget _buildSectionTitle({required IconData icon, required String title}) {
     return Row(
       children: [
-        Icon(
-          icon,
-          size: 20,
-          color: AppColors.primary,
-        ),
+        Icon(icon, size: 20, color: AppColors.primary),
         const SizedBox(width: 8),
         Text(
           title,
-          style: AppTextStyles.titleLarge.copyWith(
-            color: AppColors.primary,
-          ),
+          style: AppTextStyles.titleLarge.copyWith(color: AppColors.primary),
         ),
       ],
     );
@@ -643,10 +744,7 @@ class _ResultScreenState extends State<ResultScreen> {
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Text(
-                  qa.question,
-                  style: AppTextStyles.titleMedium,
-                ),
+                child: Text(qa.question, style: AppTextStyles.titleMedium),
               ),
             ],
           ),
@@ -677,10 +775,7 @@ class _ResultScreenState extends State<ResultScreen> {
     required Color color,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 12,
-        vertical: 6,
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(20),
@@ -688,11 +783,7 @@ class _ResultScreenState extends State<ResultScreen> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            icon,
-            size: 16,
-            color: color,
-          ),
+          Icon(icon, size: 16, color: color),
           const SizedBox(width: 6),
           Flexible(
             child: Text(

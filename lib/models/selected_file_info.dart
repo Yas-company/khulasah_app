@@ -21,6 +21,9 @@ class SelectedFileInfo {
   /// Whether user selected custom page range
   final bool useCustomPageRange;
 
+  /// Whether extraction determined that this range needs staged processing.
+  final bool requiresLargeProcessing;
+
   const SelectedFileInfo({
     required this.fileName,
     this.filePath,
@@ -33,6 +36,7 @@ class SelectedFileInfo {
     this.selectedFromPage = 1,
     this.selectedToPage = 0,
     this.useCustomPageRange = false,
+    this.requiresLargeProcessing = false,
   });
 
   String get fileSizeFormatted {
@@ -108,6 +112,7 @@ class SelectedFileInfo {
     int? selectedFromPage,
     int? selectedToPage,
     bool? useCustomPageRange,
+    bool? requiresLargeProcessing,
   }) {
     return SelectedFileInfo(
       fileName: fileName ?? this.fileName,
@@ -121,6 +126,8 @@ class SelectedFileInfo {
       selectedFromPage: selectedFromPage ?? this.selectedFromPage,
       selectedToPage: selectedToPage ?? this.selectedToPage,
       useCustomPageRange: useCustomPageRange ?? this.useCustomPageRange,
+      requiresLargeProcessing:
+          requiresLargeProcessing ?? this.requiresLargeProcessing,
     );
   }
 }

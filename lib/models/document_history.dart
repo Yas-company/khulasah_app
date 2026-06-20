@@ -88,7 +88,8 @@ class DocumentHistory {
   }
 
   /// Check if has summary
-  bool get hasSummary => generatedSummary != null && generatedSummary!.isNotEmpty;
+  bool get hasSummary =>
+      generatedSummary != null && generatedSummary!.isNotEmpty;
 
   /// Check if has Q&A
   bool get hasQuestionsAndAnswers =>
@@ -111,6 +112,12 @@ class DocumentHistory {
   /// Get Arabic label for summary length
   String get summaryLengthLabel {
     switch (summaryLength) {
+      case 'onePage':
+        return 'صفحة واحدة';
+      case 'fivePages':
+        return '5 صفحات';
+      case 'tenPages':
+        return '10 صفحات';
       case 'short':
         return 'قصير';
       case 'medium':

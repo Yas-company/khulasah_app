@@ -42,11 +42,14 @@ class BackendService {
   Future<GeneratedResult> generateResult({
     required SelectedFileInfo fileInfo,
     required SummaryOptions options,
+    void Function(String message)? onProgress,
   }) async {
     // Debug log input state
     debugPrint('[Backend] generateResult called');
     debugPrint('[Backend] hasExtractedText: ${fileInfo.hasExtractedText}');
-    debugPrint('[Backend] extractedTextLength: ${fileInfo.extractedTextLength}');
+    debugPrint(
+      '[Backend] extractedTextLength: ${fileInfo.extractedTextLength}',
+    );
     debugPrint('[Backend] textQuality: ${fileInfo.textQuality.name}');
     debugPrint('[Backend] outputTypeIndex: ${options.outputTypeIndex}');
 
@@ -55,10 +58,10 @@ class BackendService {
     final textToSend = fileInfo.extractedText ?? '';
     if (textToSend.isEmpty) {
       debugPrint('[Backend] No text available - returning error');
-      return GeneratedResult.error(
-        'لا يوجد نص مستخرج من الملف للمعالجة',
-      );
+      return GeneratedResult.error('لا يوجد نص مستخرج من الملف للمعالجة');
     }
+
+    onProgress?.call('جاري إنشاء الملخص...');
 
     // Try primary backend first (local in debug, Cloudflare Worker in release)
     debugPrint('[Backend] Trying primary backend...');
@@ -86,7 +89,9 @@ class BackendService {
 
     // In release mode, don't use local dummy fallback - show error instead
     if (AppConfig.isRelease) {
-      debugPrint('[Backend] Release mode - all backends failed, returning error');
+      debugPrint(
+        '[Backend] Release mode - all backends failed, returning error',
+      );
       return GeneratedResult.error(
         'تعذر الاتصال بخدمة التلخيص حالياً، يرجى المحاولة لاحقاً.',
       );
@@ -96,7 +101,9 @@ class BackendService {
     // Only use dummy for testing when there's no meaningful content
     final hasRealContent = textToSend.length > 100;
     if (hasRealContent) {
-      debugPrint('[Backend] Debug mode - real content exists (${textToSend.length} chars), showing error instead of dummy');
+      debugPrint(
+        '[Backend] Debug mode - real content exists (${textToSend.length} chars), showing error instead of dummy',
+      );
       return GeneratedResult.error(
         'تعذر الاتصال بخدمة التلخيص. تأكد من اتصال الإنترنت وحاول مرة أخرى.',
       );
@@ -126,49 +133,80 @@ class BackendService {
       2: 'summaryAndQuestions',
     };
 
-    // Map length index to string
-    final lengthMap = {
-      0: 'short',
-      1: 'medium',
-      2: 'long',
-      3: 'medium', // custom defaults to medium
-    };
-
     final outputType = outputTypeMap[options.outputTypeIndex] ?? 'summaryOnly';
-    final summaryLength = lengthMap[options.lengthIndex] ?? 'medium';
+    final summaryLength = options.summaryLength;
     final outputLanguage = options.outputLanguageCode;
 
+    return generateFromText(
+      extractedText: fileInfo.extractedText!,
+      outputType: outputType,
+      summaryLength: summaryLength,
+      outputLanguage: outputLanguage,
+      fileName: fileInfo.fileName,
+      fromPage: fileInfo.actualFromPage,
+      toPage: fileInfo.actualToPage,
+      totalPages: fileInfo.totalPages,
+      pageRangeLabel: fileInfo.pageRangeLabel,
+      mode: 'single',
+      targetWords: options.targetWords,
+      targetPages: options.targetPages,
+    );
+  }
+
+  Future<GeneratedResult?> generateFromText({
+    required String extractedText,
+    required String outputType,
+    required String summaryLength,
+    required String outputLanguage,
+    required String fileName,
+    required int fromPage,
+    required int toPage,
+    required int totalPages,
+    required String pageRangeLabel,
+    String mode = 'single',
+    required int targetWords,
+    required int targetPages,
+  }) async {
     final backendUrl = AppConfig.backendUrl;
     debugPrint('[Backend] Calling $backendUrl/generate-result');
-    debugPrint('[Backend] Output type: $outputType, Length: $summaryLength, Language: $outputLanguage');
-    debugPrint('[Backend] Page range: ${fileInfo.pageRangeLabel}');
+    debugPrint(
+      '[Backend] Output type: $outputType, Length: $summaryLength, Language: $outputLanguage',
+    );
+    debugPrint('[Backend] Text length: ${extractedText.length}');
+    debugPrint('[Backend] Page range: $pageRangeLabel');
+    debugPrint('[Backend] Mode: $mode');
+    debugPrint('[Backend] summaryLength: $summaryLength');
+    debugPrint('[Backend] targetWords: $targetWords');
 
     try {
       final response = await http
           .post(
             Uri.parse('$backendUrl/generate-result'),
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
-              'extractedText': fileInfo.extractedText,
+              'extractedText': extractedText,
               'outputType': outputType,
               'summaryLength': summaryLength,
               'outputLanguage': outputLanguage,
-              'fileName': fileInfo.fileName,
-              'fromPage': fileInfo.actualFromPage,
-              'toPage': fileInfo.actualToPage,
-              'totalPages': fileInfo.totalPages,
-              'pageRangeLabel': fileInfo.pageRangeLabel,
+              'fileName': fileName,
+              'fromPage': fromPage,
+              'toPage': toPage,
+              'totalPages': totalPages,
+              'pageRangeLabel': pageRangeLabel,
+              'mode': mode,
+              'targetWords': targetWords,
+              'targetPages': targetPages,
             }),
           )
-          .timeout(const Duration(seconds: 60));
+          .timeout(const Duration(seconds: 90));
 
       debugPrint('[Backend] Response status: ${response.statusCode}');
       debugPrint('[Backend] Response body length: ${response.body.length}');
 
       if (response.statusCode != 200) {
-        debugPrint('[Backend] Error response body: ${response.body.substring(0, response.body.length > 500 ? 500 : response.body.length)}');
+        debugPrint(
+          '[Backend] Error response body: ${response.body.substring(0, response.body.length > 500 ? 500 : response.body.length)}',
+        );
       }
 
       if (response.statusCode == 200) {
@@ -181,10 +219,12 @@ class BackendService {
           List<QuestionAnswer>? qaList;
           if (data['questionsAndAnswers'] != null) {
             qaList = (data['questionsAndAnswers'] as List)
-                .map((qa) => QuestionAnswer(
-                      question: qa['question'] ?? '',
-                      answer: qa['answer'] ?? '',
-                    ))
+                .map(
+                  (qa) => QuestionAnswer(
+                    question: qa['question'] ?? '',
+                    answer: qa['answer'] ?? '',
+                  ),
+                )
                 .toList();
           }
 
@@ -247,19 +287,10 @@ class BackendService {
     }
 
     // Map output type index to string
-    final outputTypeMap = {
-      0: 'summary',
-      1: 'qa',
-      2: 'both',
-    };
+    final outputTypeMap = {0: 'summary', 1: 'qa', 2: 'both'};
 
     // Map length index to string
-    final lengthMap = {
-      0: 'short',
-      1: 'medium',
-      2: 'long',
-      3: 'custom',
-    };
+    final lengthMap = {0: 'short', 1: 'medium', 2: 'long', 3: 'custom'};
 
     final outputType = outputTypeMap[options.outputTypeIndex] ?? 'summary';
     final summaryLength = lengthMap[options.lengthIndex] ?? 'medium';
@@ -361,15 +392,18 @@ class BackendService {
     return const [
       QuestionAnswer(
         question: 'ما هو الموضوع الرئيسي للوثيقة؟',
-        answer: 'هذا سؤال تجريبي محلي. بعد تشغيل الخادم، سيتم إنشاء أسئلة حقيقية بناءً على محتوى الملف.',
+        answer:
+            'هذا سؤال تجريبي محلي. بعد تشغيل الخادم، سيتم إنشاء أسئلة حقيقية بناءً على محتوى الملف.',
       ),
       QuestionAnswer(
         question: 'ما هي النقاط الرئيسية المذكورة؟',
-        answer: 'سيتم تحليل النص المستخرج وإنشاء قائمة بالنقاط الرئيسية تلقائياً باستخدام الذكاء الاصطناعي.',
+        answer:
+            'سيتم تحليل النص المستخرج وإنشاء قائمة بالنقاط الرئيسية تلقائياً باستخدام الذكاء الاصطناعي.',
       ),
       QuestionAnswer(
         question: 'ما هي الاستنتاجات النهائية؟',
-        answer: 'سيقوم النظام باستخراج الاستنتاجات والتوصيات من الوثيقة وعرضها بشكل منظم.',
+        answer:
+            'سيقوم النظام باستخراج الاستنتاجات والتوصيات من الوثيقة وعرضها بشكل منظم.',
       ),
       QuestionAnswer(
         question: 'ما هي المصطلحات المهمة في الوثيقة؟',
@@ -377,7 +411,8 @@ class BackendService {
       ),
       QuestionAnswer(
         question: 'كيف يمكن تطبيق هذه المعلومات؟',
-        answer: 'سيوفر النظام اقتراحات عملية لكيفية الاستفادة من المعلومات الموجودة في الوثيقة.',
+        answer:
+            'سيوفر النظام اقتراحات عملية لكيفية الاستفادة من المعلومات الموجودة في الوثيقة.',
       ),
     ];
   }

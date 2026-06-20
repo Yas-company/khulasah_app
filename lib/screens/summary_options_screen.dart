@@ -5,6 +5,7 @@ import '../models/summary_options.dart';
 import '../models/user_plan.dart';
 import '../services/app_feedback_service.dart';
 import '../services/auth_service.dart';
+import '../services/large_document_processor.dart';
 import '../services/pdf_text_service.dart';
 import '../services/subscription_service.dart';
 import '../utils/app_colors.dart';
@@ -17,10 +18,7 @@ import 'result_screen.dart';
 class SummaryOptionsScreen extends StatefulWidget {
   final SelectedFileInfo fileInfo;
 
-  const SummaryOptionsScreen({
-    super.key,
-    required this.fileInfo,
-  });
+  const SummaryOptionsScreen({super.key, required this.fileInfo});
 
   @override
   State<SummaryOptionsScreen> createState() => _SummaryOptionsScreenState();
@@ -28,9 +26,9 @@ class SummaryOptionsScreen extends StatefulWidget {
 
 class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     with SingleTickerProviderStateMixin {
-  // Large PDF protection constants
-  static const int _largePdfPageThreshold = 100;
-  static const int _maxPagesPerRequest = 50;
+  // Large text-based PDFs are processed in stages by BackendService.
+  static const int _largePdfPageThreshold =
+      LargeDocumentProcessor.largeRangeThreshold;
 
   int _selectedOutputType = 0;
   int _selectedLength = 0;
@@ -45,7 +43,10 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
   int _selectedPageRangeOption = 0; // 0 = all pages, 1 = custom range
   late TextEditingController _fromPageController;
   late TextEditingController _toPageController;
+  late TextEditingController _customTargetPagesController;
+  late TextEditingController _customTargetWordsController;
   String? _pageRangeError;
+  String? _customLengthError;
 
   /// Whether this PDF is considered large (> threshold pages)
   bool get _isLargePdf => widget.fileInfo.totalPages > _largePdfPageThreshold;
@@ -64,10 +65,10 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
   ];
 
   final List<Map<String, dynamic>> _lengths = [
-    {'icon': Icons.looks_one, 'title': 'صفحة واحدة'},
-    {'icon': Icons.looks_5, 'title': '5 صفحات'},
-    {'icon': Icons.looks, 'title': '10 صفحات'},
-    {'icon': Icons.tune, 'title': 'مخصص'},
+    {'icon': Icons.looks_one, 'title': 'صفحة واحدة', 'subtitle': 'ملخص مختصر'},
+    {'icon': Icons.looks_5, 'title': '5 صفحات', 'subtitle': 'ملخص مفصل'},
+    {'icon': Icons.looks, 'title': '10 صفحات', 'subtitle': 'ملخص عميق وموسع'},
+    {'icon': Icons.tune, 'title': 'مخصص', 'subtitle': 'حدد الطول المناسب لك'},
   ];
 
   final List<Map<String, dynamic>> _languages = [
@@ -90,19 +91,11 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     final totalPages = widget.fileInfo.totalPages;
     _fromPageController = TextEditingController(text: '1');
 
-    // For large PDFs, default to max 50 pages; otherwise all pages
-    if (totalPages > _largePdfPageThreshold) {
-      _toPageController = TextEditingController(
-        text: '${totalPages > 0 ? (totalPages < _maxPagesPerRequest ? totalPages : _maxPagesPerRequest) : 1}',
-      );
-      // Auto-select custom range for large PDFs
-      _selectedPageRangeOption = 1;
-      debugPrint('[SummaryOptions] Large PDF detected ($totalPages pages). Auto-selecting custom range 1-${_toPageController.text}');
-    } else {
-      _toPageController = TextEditingController(
-        text: totalPages > 0 ? '$totalPages' : '1',
-      );
-    }
+    _toPageController = TextEditingController(
+      text: totalPages > 0 ? '$totalPages' : '1',
+    );
+    _customTargetPagesController = TextEditingController(text: '2');
+    _customTargetWordsController = TextEditingController(text: '1000');
 
     // Log info (internal only)
     _logInfo();
@@ -154,7 +147,9 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     final maxPages = _currentPlan!.maxPagesPerRequest;
 
     debugPrint('[SummaryOptions] Plan: ${_currentPlan!.planId}');
-    debugPrint('[SummaryOptions] Selected pages: $selectedPageCount, Max allowed: $maxPages');
+    debugPrint(
+      '[SummaryOptions] Selected pages: $selectedPageCount, Max allowed: $maxPages',
+    );
 
     if (selectedPageCount > maxPages) {
       setState(() {
@@ -194,18 +189,42 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
   }
 
   String _getSummaryLengthString() {
-    switch (_selectedLength) {
-      case 0:
-        return 'short';
-      case 1:
-        return 'medium';
-      case 2:
-        return 'long';
-      case 3:
-        return 'custom';
-      default:
-        return 'short';
+    return _buildSummaryOptions().summaryLength;
+  }
+
+  SummaryOptions _buildSummaryOptions() {
+    return SummaryOptions(
+      outputTypeIndex: _selectedOutputType,
+      lengthIndex: _selectedLength,
+      outputLanguageIndex: _selectedLanguage,
+      customTargetWords: _selectedLength == 3
+          ? int.tryParse(_customTargetWordsController.text)
+          : null,
+      customTargetPages: _selectedLength == 3
+          ? int.tryParse(_customTargetPagesController.text)
+          : null,
+    );
+  }
+
+  bool _validateCustomLength() {
+    if (_selectedLength != 3) {
+      _customLengthError = null;
+      return true;
     }
+
+    final pages = int.tryParse(_customTargetPagesController.text);
+    final words = int.tryParse(_customTargetWordsController.text);
+    if (pages == null || pages < 1 || pages > 20) {
+      _customLengthError = 'عدد الصفحات يجب أن يكون بين 1 و20';
+      return false;
+    }
+    if (words == null || words < 300 || words > 10000) {
+      _customLengthError = 'عدد الكلمات يجب أن يكون بين 300 و10000';
+      return false;
+    }
+
+    _customLengthError = null;
+    return true;
   }
 
   @override
@@ -213,18 +232,14 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     _animationController.dispose();
     _fromPageController.dispose();
     _toPageController.dispose();
+    _customTargetPagesController.dispose();
+    _customTargetWordsController.dispose();
     super.dispose();
   }
 
   /// Validate page range inputs
   bool _validatePageRange() {
     if (_selectedPageRangeOption == 0) {
-      // All pages selected - but should not be allowed for large PDFs
-      if (_isLargePdf) {
-        _pageRangeError = 'يرجى اختيار نطاق صفحات محدد للملفات الكبيرة';
-        debugPrint('[SummaryOptions] Validation failed: all pages not allowed for large PDF');
-        return false;
-      }
       _pageRangeError = null;
       return true;
     }
@@ -258,16 +273,6 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
       return false;
     }
 
-    // For large PDFs, enforce max pages per request
-    if (_isLargePdf) {
-      final selectedPageCount = toPage - fromPage + 1;
-      if (selectedPageCount > _maxPagesPerRequest) {
-        _pageRangeError = 'يمكن تلخيص $_maxPagesPerRequest صفحة كحد أقصى في الطلب الواحد';
-        debugPrint('[SummaryOptions] Validation failed: $selectedPageCount pages > max $_maxPagesPerRequest');
-        return false;
-      }
-    }
-
     _pageRangeError = null;
     return true;
   }
@@ -276,11 +281,18 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     // Validate page range first
     setState(() {
       _validatePageRange();
+      _validateCustomLength();
     });
 
-    if (_pageRangeError != null) {
+    if (_pageRangeError != null || _customLengthError != null) {
       return;
     }
+
+    final summaryOptions = _buildSummaryOptions();
+    debugPrint(
+      '[SummaryOptions] summaryLength: ${summaryOptions.summaryLength}',
+    );
+    debugPrint('[SummaryOptions] targetWords: ${summaryOptions.targetWords}');
 
     // Check subscription limits
     final uid = AuthService.instance.userId;
@@ -289,7 +301,9 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
       final outputType = _getOutputTypeString();
       final summaryLength = _getSummaryLengthString();
 
-      debugPrint('[SummaryOptions] Checking limits - pages: $selectedPageCount, output: $outputType, length: $summaryLength');
+      debugPrint(
+        '[SummaryOptions] Checking limits - pages: $selectedPageCount, output: $outputType, length: $summaryLength',
+      );
 
       final checkResult = await _subscriptionService.checkCanGenerate(
         uid: uid,
@@ -320,11 +334,24 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
       // Determine page range
       final useCustomRange = _selectedPageRangeOption == 1;
       final fromPage = useCustomRange ? int.parse(_fromPageController.text) : 1;
-      final toPage = useCustomRange ? int.parse(_toPageController.text) : widget.fileInfo.totalPages;
+      final toPage = useCustomRange
+          ? int.parse(_toPageController.text)
+          : widget.fileInfo.totalPages;
 
       final pageCount = toPage - fromPage + 1;
-      debugPrint('[SummaryOptions] Extracting pages: $fromPage-$toPage ($pageCount pages)');
-      debugPrint('[SummaryOptions] isLargePdf: $_isLargePdf, maxPagesPerRequest: $_maxPagesPerRequest');
+      debugPrint(
+        '[SummaryOptions] Extracting pages: $fromPage-$toPage ($pageCount pages)',
+      );
+      debugPrint('[SummaryOptions] isLargePdf: $_isLargePdf');
+
+      if (pageCount > LargeDocumentProcessor.largeRangeThreshold) {
+        _navigateToResult(
+          fromPage: fromPage,
+          toPage: toPage,
+          useCustomRange: useCustomRange,
+        );
+        return;
+      }
 
       // Extract text with automatic internal fallback for scanned PDFs
       final extendedResult = await _pdfTextService.extractTextWithOcrFallback(
@@ -341,7 +368,8 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
         onOcrFallbackStart: () {
           if (mounted) {
             setState(() {
-              _extractionStatusMessage = 'يتم الآن معالجة الصفحات، قد يستغرق ذلك وقتًا أطول قليلًا.';
+              _extractionStatusMessage =
+                  'يتم الآن معالجة الصفحات، قد يستغرق ذلك وقتًا أطول قليلًا.';
             });
           }
         },
@@ -357,8 +385,12 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
         case ExtractionStatus.success:
           // Text was extracted successfully (either direct or via internal processing)
           final result = extendedResult.extractionResult;
-          debugPrint('[SummaryOptions] Extraction success: ${result.text?.length ?? 0} chars');
-          debugPrint('[SummaryOptions] Content source: ${result.contentSource}');
+          debugPrint(
+            '[SummaryOptions] Extraction success: ${result.text?.length ?? 0} chars',
+          );
+          debugPrint(
+            '[SummaryOptions] Content source: ${result.contentSource}',
+          );
 
           // Update file info with extraction result
           final updatedFile = widget.fileInfo.copyWith(
@@ -371,26 +403,24 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
             selectedToPage: toPage,
           );
 
-          final options = SummaryOptions(
-            outputTypeIndex: _selectedOutputType,
-            lengthIndex: _selectedLength,
-            outputLanguageIndex: _selectedLanguage,
-          );
+          final options = _buildSummaryOptions();
 
           Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (_) => ResultScreen(
-                fileInfo: updatedFile,
-                options: options,
-              ),
+              builder: (_) =>
+                  ResultScreen(fileInfo: updatedFile, options: options),
             ),
           );
           break;
 
         case ExtractionStatus.tooManyPagesForOcr:
-          // Normal extraction returned empty, but too many pages for internal processing
-          debugPrint('[SummaryOptions] Too many pages for internal processing');
-          await _showTooManyPagesDialog();
+          debugPrint('[SummaryOptions] Switching to staged processing');
+          _navigateToResult(
+            fromPage: fromPage,
+            toPage: toPage,
+            useCustomRange: useCustomRange,
+            requiresLargeProcessing: true,
+          );
           break;
 
         case ExtractionStatus.failed:
@@ -401,11 +431,15 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
 
         case ExtractionStatus.fileError:
           // File error occurred
-          debugPrint('[SummaryOptions] File error: ${extendedResult.statusMessage}');
+          debugPrint(
+            '[SummaryOptions] File error: ${extendedResult.statusMessage}',
+          );
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text(extendedResult.statusMessage ?? 'حدث خطأ أثناء قراءة الملف'),
+                content: Text(
+                  extendedResult.statusMessage ?? 'حدث خطأ أثناء قراءة الملف',
+                ),
                 backgroundColor: AppColors.error,
               ),
             );
@@ -432,70 +466,25 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     }
   }
 
-  /// Show dialog when selected pages exceed internal processing limit
-  Future<void> _showTooManyPagesDialog() async {
+  void _navigateToResult({
+    required int fromPage,
+    required int toPage,
+    required bool useCustomRange,
+    bool requiresLargeProcessing = false,
+  }) {
     if (!mounted) return;
 
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: AlertDialog(
-          backgroundColor: AppColors.surface,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: AppColors.accent.withValues(alpha: 0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.info_outline,
-                  color: AppColors.accent,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'تعذر قراءة الصفحات',
-                  style: AppTextStyles.titleLarge,
-                ),
-              ),
-            ],
-          ),
-          content: Text(
-            'هذا الملف يحتاج معالجة أعمق. يرجى اختيار ${PdfTextService.maxOcrPagesPerRequest} صفحات كحد أقصى ثم المحاولة مرة أخرى.',
-            style: AppTextStyles.bodyMedium.copyWith(
-              color: AppColors.textSecondary,
-              height: 1.5,
-            ),
-          ),
-          actions: [
-            ElevatedButton(
-              onPressed: () => Navigator.of(context).pop(),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              child: Text(
-                'حسنًا',
-                style: AppTextStyles.labelLarge.copyWith(
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ],
-        ),
+    final updatedFile = widget.fileInfo.copyWith(
+      useCustomPageRange: useCustomRange,
+      selectedFromPage: fromPage,
+      selectedToPage: toPage,
+      requiresLargeProcessing: requiresLargeProcessing,
+    );
+    final options = _buildSummaryOptions();
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ResultScreen(fileInfo: updatedFile, options: options),
       ),
     );
   }
@@ -557,9 +546,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
               ),
               child: Text(
                 'حسنًا',
-                style: AppTextStyles.labelLarge.copyWith(
-                  color: Colors.white,
-                ),
+                style: AppTextStyles.labelLarge.copyWith(color: Colors.white),
               ),
             ),
           ],
@@ -581,10 +568,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
             icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
             onPressed: _isExtracting ? null : () => Navigator.of(context).pop(),
           ),
-          title: Text(
-            'خيارات التلخيص',
-            style: AppTextStyles.headlineSmall,
-          ),
+          title: Text('خيارات التلخيص', style: AppTextStyles.headlineSmall),
           centerTitle: true,
         ),
         body: SafeArea(
@@ -613,10 +597,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                 const SizedBox(height: 24),
 
                 // Output Language Section
-                Text(
-                  'لغة النتيجة',
-                  style: AppTextStyles.titleLarge,
-                ),
+                Text('لغة النتيجة', style: AppTextStyles.titleLarge),
                 const SizedBox(height: 16),
                 ...List.generate(_languages.length, (index) {
                   final lang = _languages[index];
@@ -640,10 +621,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                 const SizedBox(height: 24),
 
                 // Output Type Section
-                Text(
-                  'نوع المخرجات',
-                  style: AppTextStyles.titleLarge,
-                ),
+                Text('نوع المخرجات', style: AppTextStyles.titleLarge),
                 const SizedBox(height: 16),
                 ...List.generate(_outputTypes.length, (index) {
                   final type = _outputTypes[index];
@@ -667,9 +645,13 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                 const SizedBox(height: 24),
 
                 // Length Section
+                Text('طول الملخص', style: AppTextStyles.titleLarge),
+                const SizedBox(height: 6),
                 Text(
-                  'طول الملخص',
-                  style: AppTextStyles.titleLarge,
+                  'الطول تقديري ويعتمد على حجم الملف والمحتوى.',
+                  style: AppTextStyles.bodySmall.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 ...List.generate(_lengths.length, (index) {
@@ -679,6 +661,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                     child: OptionCard(
                       icon: length['icon'] as IconData,
                       title: length['title'] as String,
+                      subtitle: length['subtitle'] as String?,
                       isSelected: _selectedLength == index,
                       onTap: _isExtracting
                           ? null
@@ -686,11 +669,41 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                               AppFeedbackService.instance.selection();
                               setState(() {
                                 _selectedLength = index;
+                                _customLengthError = null;
                               });
                             },
                     ),
                   );
                 }),
+                if (_selectedLength == 3) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildCustomLengthField(
+                          controller: _customTargetPagesController,
+                          label: 'عدد الصفحات',
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildCustomLengthField(
+                          controller: _customTargetWordsController,
+                          label: 'عدد الكلمات',
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_customLengthError != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      _customLengthError!,
+                      style: AppTextStyles.bodySmall.copyWith(
+                        color: AppColors.error,
+                      ),
+                    ),
+                  ],
+                ],
                 const SizedBox(height: 32),
 
                 // Extraction status message
@@ -712,7 +725,9 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                           height: 20,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              AppColors.primary,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -756,10 +771,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
       children: [
         Row(
           children: [
-            Text(
-              'نطاق الصفحات',
-              style: AppTextStyles.titleLarge,
-            ),
+            Text('نطاق الصفحات', style: AppTextStyles.titleLarge),
             if (hasTotalPages) ...[
               const SizedBox(width: 8),
               Container(
@@ -806,7 +818,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'هذا الملف كبير جدًا. يرجى اختيار نطاق صفحات محدد للتلخيص.',
+                        'هذا الملف كبير وقد تستغرق معالجته وقتًا أطول.',
                         style: AppTextStyles.bodySmall.copyWith(
                           color: AppColors.accent,
                           fontWeight: FontWeight.w500,
@@ -817,7 +829,14 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'يمكن تلخيص $_maxPagesPerRequest صفحة كحد أقصى في الطلب الواحد.',
+                  'قد تستغرق النتيجة وقتًا أطول حسب عدد الصفحات.',
+                  style: AppTextStyles.bodySmall.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'يرجى إبقاء التطبيق مفتوحًا أثناء معالجة الملفات الكبيرة.',
                   style: AppTextStyles.bodySmall.copyWith(
                     color: AppColors.textSecondary,
                   ),
@@ -828,13 +847,13 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
           const SizedBox(height: 16),
         ],
 
-        // All pages option (disabled for large PDFs)
+        // All pages option
         OptionCard(
           icon: Icons.select_all,
           title: 'كل الصفحات',
           subtitle: hasTotalPages ? 'من 1 إلى $totalPages' : null,
-          isSelected: _selectedPageRangeOption == 0 && !isLargePdf,
-          onTap: (_isExtracting || isLargePdf)
+          isSelected: _selectedPageRangeOption == 0,
+          onTap: _isExtracting
               ? null
               : () {
                   AppFeedbackService.instance.selection();
@@ -1007,6 +1026,33 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
     );
   }
 
+  Widget _buildCustomLengthField({
+    required TextEditingController controller,
+    required String label,
+  }) {
+    return TextFormField(
+      controller: controller,
+      enabled: !_isExtracting,
+      keyboardType: TextInputType.number,
+      textAlign: TextAlign.center,
+      inputFormatters: [
+        FilteringTextInputFormatter.digitsOnly,
+        LengthLimitingTextInputFormatter(5),
+      ],
+      decoration: InputDecoration(
+        labelText: label,
+        filled: true,
+        fillColor: AppColors.surface,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+      onChanged: (_) {
+        if (_customLengthError != null) {
+          setState(() => _customLengthError = null);
+        }
+      },
+    );
+  }
+
   Widget _buildFileInfoCard() {
     final totalPages = widget.fileInfo.totalPages;
 
@@ -1016,9 +1062,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
       decoration: BoxDecoration(
         color: AppColors.primary.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: AppColors.primary.withValues(alpha: 0.2),
-        ),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
       ),
       child: Row(
         children: [
@@ -1057,7 +1101,8 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                           color: AppColors.textSecondary,
                         ),
                       ),
-                    if (widget.fileInfo.fileSizeFormatted.isNotEmpty && totalPages > 0)
+                    if (widget.fileInfo.fileSizeFormatted.isNotEmpty &&
+                        totalPages > 0)
                       Text(
                         ' • ',
                         style: AppTextStyles.bodySmall.copyWith(
@@ -1086,10 +1131,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
       return _buildProcessingCard();
     }
 
-    return FadeTransition(
-      opacity: _fadeAnimation,
-      child: _buildReadyCard(),
-    );
+    return FadeTransition(opacity: _fadeAnimation, child: _buildReadyCard());
   }
 
   Widget _buildProcessingCard() {
@@ -1099,9 +1141,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
       decoration: BoxDecoration(
         color: AppColors.primary.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: AppColors.primary.withValues(alpha: 0.15),
-        ),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.15)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1145,9 +1185,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
       decoration: BoxDecoration(
         color: AppColors.primary.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: AppColors.primary.withValues(alpha: 0.25),
-        ),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1218,17 +1256,11 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
       decoration: BoxDecoration(
         color: AppColors.accent.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: AppColors.accent.withValues(alpha: 0.3),
-        ),
+        border: Border.all(color: AppColors.accent.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
-          Icon(
-            Icons.warning_amber_rounded,
-            color: AppColors.accent,
-            size: 20,
-          ),
+          Icon(Icons.warning_amber_rounded, color: AppColors.accent, size: 20),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
