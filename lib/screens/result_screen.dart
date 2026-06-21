@@ -295,9 +295,10 @@ class _ResultScreenState extends State<ResultScreen> {
     final lengthMap = {0: 'short', 1: 'medium', 2: 'long', 3: 'medium'};
 
     final success = await _pdfExportService.exportAndShare(
+      context: context,
       fileName: widget.fileInfo.fileName,
       outputType:
-          outputTypeMap[widget.options.outputTypeIndex] ?? 'summaryOnly',
+      outputTypeMap[widget.options.outputTypeIndex] ?? 'summaryOnly',
       summaryLength: lengthMap[widget.options.lengthIndex] ?? 'medium',
       outputLanguage: widget.options.outputLanguageCode,
       result: _result!,
