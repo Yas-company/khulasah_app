@@ -323,31 +323,30 @@ class PdfExportService {
 
     widgets.add(pw.SizedBox(height: 24));
 
-    // Summary section
+    // Summary section - split into paragraphs for page spanning
     if (result.hasSummary) {
       widgets.add(_buildSectionHeader('الملخص'));
       widgets.add(pw.SizedBox(height: 12));
-      widgets.add(
-        pw.Container(
-          width: double.infinity,
-          padding: const pw.EdgeInsets.all(16),
-          decoration: pw.BoxDecoration(
-            color: PdfColors.grey100,
-            borderRadius: pw.BorderRadius.circular(8),
-          ),
-          child: pw.Text(
-            result.summary!,
-            style: pw.TextStyle(
-              font: _arabicFont,
-              fontSize: 12,
-              lineSpacing: 1.8,
+
+      // Split summary into paragraphs to allow page breaks
+      final paragraphs = result.summary!.split('\n');
+      for (final paragraph in paragraphs) {
+        if (paragraph.trim().isNotEmpty) {
+          widgets.add(
+            pw.Paragraph(
+              text: paragraph.trim(),
+              style: pw.TextStyle(
+                font: _arabicFont,
+                fontSize: 12,
+                lineSpacing: 1.8,
+              ),
+              textAlign: pw.TextAlign.right,
             ),
-            textDirection: pw.TextDirection.rtl,
-            textAlign: pw.TextAlign.right,
-          ),
-        ),
-      );
-      widgets.add(pw.SizedBox(height: 24));
+          );
+          widgets.add(pw.SizedBox(height: 8));
+        }
+      }
+      widgets.add(pw.SizedBox(height: 16));
     }
 
     // Q&A section
@@ -357,8 +356,8 @@ class PdfExportService {
 
       for (var i = 0; i < result.questionsAndAnswers!.length; i++) {
         final qa = result.questionsAndAnswers![i];
-        widgets.add(_buildQACard(i + 1, qa));
-        widgets.add(pw.SizedBox(height: 12));
+        // Add all widgets from Q&A (allows page spanning)
+        widgets.addAll(_buildQAWidgets(i + 1, qa));
       }
     }
 
@@ -432,75 +431,70 @@ class PdfExportService {
     );
   }
 
-  pw.Widget _buildQACard(int index, QuestionAnswer qa) {
-    return pw.Container(
-      width: double.infinity,
-      padding: const pw.EdgeInsets.all(12),
-      decoration: pw.BoxDecoration(
-        border: pw.Border.all(color: PdfColors.grey300),
-        borderRadius: pw.BorderRadius.circular(8),
-      ),
-      child: pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.end,
-        children: [
-          pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.end,
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              pw.Expanded(
-                child: pw.Text(
-                  qa.question,
-                  style: pw.TextStyle(
-                    font: _arabicBoldFont,
-                    fontSize: 11,
-                  ),
-                  textDirection: pw.TextDirection.rtl,
-                  textAlign: pw.TextAlign.right,
-                ),
-              ),
-              pw.SizedBox(width: 8),
-              pw.Container(
-                width: 24,
-                height: 24,
-                decoration: pw.BoxDecoration(
-                  color: PdfColor.fromHex('#0F5132'),
-                  borderRadius: pw.BorderRadius.circular(4),
-                ),
-                child: pw.Center(
-                  child: pw.Text(
-                    '$index',
-                    style: pw.TextStyle(
-                      font: _arabicBoldFont,
-                      fontSize: 10,
-                      color: PdfColors.white,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          pw.SizedBox(height: 8),
-          pw.Container(
-            width: double.infinity,
-            padding: const pw.EdgeInsets.all(8),
-            decoration: pw.BoxDecoration(
-              color: PdfColors.grey100,
-              borderRadius: pw.BorderRadius.circular(4),
-            ),
-            child: pw.Text(
-              qa.answer,
-              style: pw.TextStyle(
-                font: _arabicFont,
-                fontSize: 10,
-                lineSpacing: 1.5,
-              ),
-              textDirection: pw.TextDirection.rtl,
-              textAlign: pw.TextAlign.right,
+  /// Build Q&A section as a list of widgets (allows page spanning)
+  List<pw.Widget> _buildQAWidgets(int index, QuestionAnswer qa) {
+    final widgets = <pw.Widget>[];
+
+    // Question number badge
+    widgets.add(
+      pw.Container(
+        width: 28,
+        height: 28,
+        decoration: pw.BoxDecoration(
+          color: PdfColor.fromHex('#0F5132'),
+          borderRadius: pw.BorderRadius.circular(4),
+        ),
+        child: pw.Center(
+          child: pw.Text(
+            'س$index',
+            style: pw.TextStyle(
+              font: _arabicBoldFont,
+              fontSize: 10,
+              color: PdfColors.white,
             ),
           ),
-        ],
+        ),
       ),
     );
+    widgets.add(pw.SizedBox(height: 6));
+
+    // Question text as Paragraph
+    widgets.add(
+      pw.Paragraph(
+        text: qa.question,
+        style: pw.TextStyle(
+          font: _arabicBoldFont,
+          fontSize: 11,
+        ),
+        textAlign: pw.TextAlign.right,
+      ),
+    );
+    widgets.add(pw.SizedBox(height: 8));
+
+    // Answer - split into paragraphs for long answers
+    final answerParagraphs = qa.answer.split('\n');
+    for (final paragraph in answerParagraphs) {
+      if (paragraph.trim().isNotEmpty) {
+        widgets.add(
+          pw.Paragraph(
+            text: paragraph.trim(),
+            style: pw.TextStyle(
+              font: _arabicFont,
+              fontSize: 10,
+              lineSpacing: 1.5,
+            ),
+            textAlign: pw.TextAlign.right,
+          ),
+        );
+        widgets.add(pw.SizedBox(height: 4));
+      }
+    }
+
+    widgets.add(pw.SizedBox(height: 12));
+    widgets.add(pw.Divider(color: PdfColors.grey300));
+    widgets.add(pw.SizedBox(height: 12));
+
+    return widgets;
   }
 
   String _getOutputTypeLabel(String outputType) {
