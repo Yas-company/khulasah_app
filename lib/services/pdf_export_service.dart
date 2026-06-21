@@ -91,13 +91,15 @@ class PdfExportService {
   /// Export result to PDF and share
   ///
   /// Returns true if export and share was successful.
-  Future<bool> exportAndShare({
-    required String fileName,
-    required String outputType,
-    required String summaryLength,
-    required GeneratedResult result,
-    String pageRangeLabel = 'كل الصفحات',
-    String outputLanguage = 'ar',
+
+    Future<bool> exportAndShare({
+      required BuildContext context,
+      required String fileName,
+      required String outputType,
+      required String summaryLength,
+      required GeneratedResult result,
+      String pageRangeLabel = 'كل الصفحات',
+      String outputLanguage = 'ar',
   }) async {
     _lastError = PdfExportError.none;
 
@@ -132,16 +134,12 @@ class PdfExportService {
       pdf.addPage(
         pw.MultiPage(
           pageFormat: PdfPageFormat.a4,
-          textDirection: pw.TextDirection.rtl,
-          margin: const pw.EdgeInsets.all(40),
-          build: (context) => _buildContent(
-            fileName: fileName, // Original Arabic name displayed inside PDF
-            outputType: outputType,
-            summaryLength: summaryLength,
-            outputLanguage: outputLanguage,
-            result: result,
-            pageRangeLabel: pageRangeLabel,
-          ),
+          build: (context) => [
+            pw.Text(
+              'اختبار',
+              style: pw.TextStyle(font: _arabicFont),
+            ),
+          ],
         ),
       );
 
@@ -199,10 +197,15 @@ class PdfExportService {
     }
 
     // Step 4: Share the file
-    try {
-      debugPrint('[PDF] Share started...');
 
+    // 4. Share
+    try {
       final xFile = XFile(
+        file.path,
+        mimeType: 'application/pdf',
+      );
+
+      final _ = XFile(
         file.path,
         mimeType: 'application/pdf',
         name: safePdfName,
@@ -211,21 +214,20 @@ class PdfExportService {
       await Share.shareXFiles(
         [xFile],
         subject: 'خُلاصة - ملخص PDF',
-        text: 'نتيجة تلخيص الملف من تطبيق خُلاصة',
       );
 
       debugPrint('[PDF] Share completed successfully');
-      debugPrint('[PDF] ========== Export Completed ==========');
       return true;
+
+
     } catch (e, stackTrace) {
+      debugPrint('[PDF] Share failed: $e');
+      debugPrint('$stackTrace');
+
       _lastError = PdfExportError.pdfShareFailed;
-      debugPrint('[PDF] ERROR: Share failed: $e');
-      debugPrint('[PDF] Stack trace: $stackTrace');
-      // PDF was created but sharing failed
       return false;
     }
-  }
-
+}
   /// Get user-friendly error message based on last error
   String getErrorMessage() {
     switch (_lastError) {
@@ -242,8 +244,6 @@ class PdfExportService {
     }
   }
 
-  /// Get the last error code (for debugging)
-  PdfExportError get lastError => _lastError;
 
   List<pw.Widget> _buildContent({
     required String fileName,
@@ -256,42 +256,8 @@ class PdfExportService {
     final widgets = <pw.Widget>[];
 
     // Header with app name
-    widgets.add(
-      pw.Container(
-        width: double.infinity,
-        padding: const pw.EdgeInsets.all(16),
-        decoration: pw.BoxDecoration(
-          color: PdfColor.fromHex('#0F5132'),
-          borderRadius: pw.BorderRadius.circular(8),
-        ),
-        child: pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.center,
-          children: [
-            pw.Text(
-              'خُلاصة',
-              style: pw.TextStyle(
-                font: _arabicBoldFont,
-                fontSize: 28,
-                color: PdfColors.white,
-              ),
-              textDirection: pw.TextDirection.rtl,
-            ),
-            pw.SizedBox(height: 4),
-            pw.Text(
-              'لخص ملفاتك ومستنداتك بسهولة',
-              style: pw.TextStyle(
-                font: _arabicFont,
-                fontSize: 12,
-                color: PdfColors.white,
-              ),
-              textDirection: pw.TextDirection.rtl,
-            ),
-          ],
-        ),
-      ),
-    );
 
-    widgets.add(pw.SizedBox(height: 24));
+
 
     // File info section
     widgets.add(
@@ -323,18 +289,17 @@ class PdfExportService {
 
     widgets.add(pw.SizedBox(height: 24));
 
+
+
+
     // Summary section
     if (result.hasSummary) {
       widgets.add(_buildSectionHeader('الملخص'));
       widgets.add(pw.SizedBox(height: 12));
+
       widgets.add(
-        pw.Container(
-          width: double.infinity,
-          padding: const pw.EdgeInsets.all(16),
-          decoration: pw.BoxDecoration(
-            color: PdfColors.grey100,
-            borderRadius: pw.BorderRadius.circular(8),
-          ),
+        pw.Padding(
+          padding: const pw.EdgeInsets.all(8),
           child: pw.Text(
             result.summary!,
             style: pw.TextStyle(
@@ -347,20 +312,76 @@ class PdfExportService {
           ),
         ),
       );
+
       widgets.add(pw.SizedBox(height: 24));
     }
+    pw.Widget _buildQACard(int index, QuestionAnswer qa) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(bottom: 16),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.end,
+          children: [
 
-    // Q&A section
-    if (result.hasQuestions) {
-      widgets.add(_buildSectionHeader('الأسئلة والأجوبة'));
-      widgets.add(pw.SizedBox(height: 12));
+            // السؤال
+            pw.Row(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Container(
+                  width: 24,
+                  height: 24,
+                  alignment: pw.Alignment.center,
+                  decoration: pw.BoxDecoration(
+                    color: PdfColor.fromHex('#0F5132'),
+                    borderRadius: pw.BorderRadius.circular(4),
+                  ),
+                  child: pw.Text(
+                    '$index',
+                    style: pw.TextStyle(
+                      font: _arabicBoldFont,
+                      fontSize: 10,
+                      color: PdfColors.white,
+                    ),
+                  ),
+                ),
 
-      for (var i = 0; i < result.questionsAndAnswers!.length; i++) {
-        final qa = result.questionsAndAnswers![i];
-        widgets.add(_buildQACard(i + 1, qa));
-        widgets.add(pw.SizedBox(height: 12));
-      }
+                pw.SizedBox(width: 8),
+
+                pw.Expanded(
+                  child: pw.Text(
+                    qa.question,
+                    style: pw.TextStyle(
+                      font: _arabicBoldFont,
+                      fontSize: 11,
+                    ),
+                    textDirection: pw.TextDirection.rtl,
+                    textAlign: pw.TextAlign.right,
+                  ),
+                ),
+              ],
+            ),
+
+            pw.SizedBox(height: 8),
+
+            // الإجابة
+            pw.Text(
+              qa.answer,
+              style: pw.TextStyle(
+                font: _arabicFont,
+                fontSize: 10,
+                lineSpacing: 1.5,
+              ),
+              textDirection: pw.TextDirection.rtl,
+              textAlign: pw.TextAlign.right,
+            ),
+
+            pw.SizedBox(height: 10),
+            pw.Divider(),
+          ],
+        ),
+      );
     }
+
+
 
     // Footer
     widgets.add(pw.SizedBox(height: 24));
@@ -433,73 +454,59 @@ class PdfExportService {
   }
 
   pw.Widget _buildQACard(int index, QuestionAnswer qa) {
-    return pw.Container(
-      width: double.infinity,
-      padding: const pw.EdgeInsets.all(12),
-      decoration: pw.BoxDecoration(
-        border: pw.Border.all(color: PdfColors.grey300),
-        borderRadius: pw.BorderRadius.circular(8),
-      ),
-      child: pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.end,
-        children: [
-          pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.end,
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              pw.Expanded(
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.end,
+      children: [
+        pw.Row(
+          mainAxisAlignment: pw.MainAxisAlignment.end,
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Expanded(
+              child: pw.Text(
+                qa.question,
+                style: pw.TextStyle(
+                  font: _arabicBoldFont,
+                  fontSize: 11,
+                ),
+                textDirection: pw.TextDirection.rtl,
+                textAlign: pw.TextAlign.right,
+              ),
+            ),
+            pw.SizedBox(width: 8),
+            pw.Container(
+              width: 24,
+              height: 24,
+              decoration: pw.BoxDecoration(
+                color: PdfColor.fromHex('#0F5132'),
+                borderRadius: pw.BorderRadius.circular(4),
+              ),
+              child: pw.Center(
                 child: pw.Text(
-                  qa.question,
+                  '$index',
                   style: pw.TextStyle(
                     font: _arabicBoldFont,
-                    fontSize: 11,
-                  ),
-                  textDirection: pw.TextDirection.rtl,
-                  textAlign: pw.TextAlign.right,
-                ),
-              ),
-              pw.SizedBox(width: 8),
-              pw.Container(
-                width: 24,
-                height: 24,
-                decoration: pw.BoxDecoration(
-                  color: PdfColor.fromHex('#0F5132'),
-                  borderRadius: pw.BorderRadius.circular(4),
-                ),
-                child: pw.Center(
-                  child: pw.Text(
-                    '$index',
-                    style: pw.TextStyle(
-                      font: _arabicBoldFont,
-                      fontSize: 10,
-                      color: PdfColors.white,
-                    ),
+                    fontSize: 10,
+                    color: PdfColors.white,
                   ),
                 ),
               ),
-            ],
-          ),
-          pw.SizedBox(height: 8),
-          pw.Container(
-            width: double.infinity,
-            padding: const pw.EdgeInsets.all(8),
-            decoration: pw.BoxDecoration(
-              color: PdfColors.grey100,
-              borderRadius: pw.BorderRadius.circular(4),
             ),
-            child: pw.Text(
-              qa.answer,
-              style: pw.TextStyle(
-                font: _arabicFont,
-                fontSize: 10,
-                lineSpacing: 1.5,
-              ),
-              textDirection: pw.TextDirection.rtl,
-              textAlign: pw.TextAlign.right,
-            ),
+          ],
+        ),
+        pw.SizedBox(height: 8),
+        pw.Text(
+          qa.answer,
+          style: pw.TextStyle(
+            font: _arabicFont,
+            fontSize: 10,
+            lineSpacing: 1.5,
           ),
-        ],
-      ),
+          textDirection: pw.TextDirection.rtl,
+          textAlign: pw.TextAlign.right,
+        ),
+        pw.SizedBox(height: 16),
+        pw.Divider(),
+      ],
     );
   }
 

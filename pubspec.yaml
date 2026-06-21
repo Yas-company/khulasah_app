@@ -42,7 +42,7 @@ dependencies:
   firebase_auth: ^5.4.1
   cloud_firestore: ^5.6.1
   pdf: ^3.11.1
-  share_plus: ^10.1.4
+  share_plus: ^11.0.0
   path_provider: ^2.1.5
   http: ^1.2.2
   audioplayers: ^6.1.0
