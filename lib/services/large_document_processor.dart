@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 
 import '../models/generated_result.dart';
 import 'backend_service.dart';
@@ -52,6 +53,7 @@ class LargeDocumentProcessor {
        _backendService = backendService ?? BackendService();
 
   Future<GeneratedResult> process({
+    required BuildContext context,
     required String filePath,
     required String fileName,
     required int totalPages,

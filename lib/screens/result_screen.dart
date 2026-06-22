@@ -79,6 +79,7 @@ class _ResultScreenState extends State<ResultScreen> {
         } else {
           _cancellationToken = LargeDocumentCancellationToken();
           result = await _largeDocumentProcessor.process(
+            context: context,
             filePath: filePath,
             fileName: widget.fileInfo.fileName,
             totalPages: widget.fileInfo.totalPages,

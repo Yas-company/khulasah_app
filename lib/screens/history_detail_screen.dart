@@ -45,8 +45,7 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: AppColors.error.withValues(alpha: 0.1),
-                  shape: BoxShape.circle,
+                  color: AppColors.error.withOpacity(0.1),                  shape: BoxShape.circle,
                 ),
                 child: const Icon(
                   Icons.delete_outline,
@@ -279,8 +278,7 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
                 border: Border.all(color: AppColors.border),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    blurRadius: 8,
+                    color: Colors.black.withOpacity(0.04),
                     offset: const Offset(0, 2),
                   ),
                 ],
@@ -439,7 +437,7 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
             width: 64,
             height: 64,
             decoration: BoxDecoration(
-              color: AppColors.textSecondary.withValues(alpha: 0.1),
+              color: AppColors.textSecondary.withOpacity(0.1),
               shape: BoxShape.circle,
             ),
             child: const Icon(
@@ -569,7 +567,7 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
         vertical: 6,
       ),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        color: color.withOpacity(0.1),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(

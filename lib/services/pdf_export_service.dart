@@ -92,6 +92,7 @@ class PdfExportService {
   ///
   /// Returns true if export and share was successful.
   Future<bool> exportAndShare({
+    required BuildContext context,
     required String fileName,
     required String outputType,
     required String summaryLength,
@@ -208,11 +209,16 @@ class PdfExportService {
         name: safePdfName,
       );
 
+      final box = context.findRenderObject() as RenderBox?;
+
       await Share.shareXFiles(
         [xFile],
         subject: 'خُلاصة - ملخص PDF',
         text: 'نتيجة تلخيص الملف من تطبيق خُلاصة',
+        sharePositionOrigin:
+        box!.localToGlobal(Offset.zero) & box.size,
       );
+
 
       debugPrint('[PDF] Share completed successfully');
       debugPrint('[PDF] ========== Export Completed ==========');
@@ -383,30 +389,37 @@ class PdfExportService {
   }
 
   pw.Widget _buildInfoRow(String label, String value) {
-    return pw.Row(
-      mainAxisAlignment: pw.MainAxisAlignment.end,
-      children: [
-        pw.Expanded(
-          child: pw.Text(
-            value,
-            style: pw.TextStyle(
-              font: _arabicFont,
-              fontSize: 11,
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(bottom: 6),
+      child: pw.Row(
+        children: [
+          pw.Expanded(
+            flex: 2,
+            child: pw.Text(
+              label,
+              style: pw.TextStyle(
+                font: _arabicBoldFont,
+                fontSize: 11,
+              ),
+              textAlign: pw.TextAlign.right,
+              textDirection: pw.TextDirection.rtl,
             ),
-            textDirection: pw.TextDirection.rtl,
-            textAlign: pw.TextAlign.right,
           ),
-        ),
-        pw.SizedBox(width: 8),
-        pw.Text(
-          label,
-          style: pw.TextStyle(
-            font: _arabicBoldFont,
-            fontSize: 11,
+
+          pw.Expanded(
+            flex: 4,
+            child: pw.Text(
+              value,
+              style: pw.TextStyle(
+                font: _arabicFont,
+                fontSize: 11,
+              ),
+              textAlign: pw.TextAlign.left,
+              textDirection: pw.TextDirection.rtl,
+            ),
           ),
-          textDirection: pw.TextDirection.rtl,
-        ),
-      ],
+        ],
+      ),
     );
   }
 
