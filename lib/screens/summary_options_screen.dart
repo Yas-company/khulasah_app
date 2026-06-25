@@ -836,7 +836,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'يرجى إبقاء التطبيق مفتوحًا أثناء معالجة الملفات الكبيرة.',
+                  'يمكنك الرجوع لاحقًا، وسنحاول المتابعة من آخر تقدم محفوظ.',
                   style: AppTextStyles.bodySmall.copyWith(
                     color: AppColors.textSecondary,
                   ),

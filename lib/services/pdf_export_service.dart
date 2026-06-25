@@ -32,6 +32,7 @@ class PdfExportService {
   // Cached fonts - using Amiri (static TTF fonts)
   pw.Font? _arabicFont;
   pw.Font? _arabicBoldFont;
+  pw.MemoryImage? _logoImage;
   bool _fontsLoaded = false;
   String? _fontLoadError;
   PdfExportError _lastError = PdfExportError.none;
@@ -47,6 +48,7 @@ class PdfExportService {
   void clearFontCache() {
     _arabicFont = null;
     _arabicBoldFont = null;
+    _logoImage = null;
     _fontsLoaded = false;
     _fontLoadError = null;
     debugPrint('[PDF] Font cache cleared');
@@ -55,7 +57,10 @@ class PdfExportService {
   /// Load Arabic fonts from assets
   /// Uses Amiri font - a static TTF font that works with the pdf package
   Future<bool> _loadFonts() async {
-    if (_fontsLoaded && _arabicFont != null && _arabicBoldFont != null) {
+    if (_fontsLoaded &&
+        _arabicFont != null &&
+        _arabicBoldFont != null &&
+        _logoImage != null) {
       debugPrint('[PDF] Using cached fonts');
       return true;
     }
@@ -73,9 +78,16 @@ class PdfExportService {
       final boldData = await rootBundle.load('assets/fonts/Amiri-Bold.ttf');
       debugPrint('[PDF] Bold font bytes length: ${boldData.lengthInBytes}');
 
+      debugPrint('[PDF] Loading logo...');
+      final logoData = await rootBundle.load(
+        'assets/images/khulasah_full_logo_horizontal_transparent.png',
+      );
+      debugPrint('[PDF] Logo bytes length: ${logoData.lengthInBytes}');
+
       // Create font objects
       _arabicFont = pw.Font.ttf(regularData);
       _arabicBoldFont = pw.Font.ttf(boldData);
+      _logoImage = pw.MemoryImage(logoData.buffer.asUint8List());
       _fontsLoaded = true;
       _fontLoadError = null;
 
@@ -127,26 +139,16 @@ class PdfExportService {
     Uint8List pdfBytes;
     try {
       debugPrint('[PDF] Building PDF document...');
-      final pdf = pw.Document();
-
-      // Add content pages (Arabic file name is used INSIDE the PDF content)
-      pdf.addPage(
-        pw.MultiPage(
-          pageFormat: PdfPageFormat.a4,
-          textDirection: pw.TextDirection.rtl,
-          margin: const pw.EdgeInsets.all(40),
-          build: (context) => _buildContent(
-            fileName: fileName, // Original Arabic name displayed inside PDF
-            outputType: outputType,
-            summaryLength: summaryLength,
-            outputLanguage: outputLanguage,
-            result: result,
-            pageRangeLabel: pageRangeLabel,
-          ),
-        ),
+      final buildResult = await _buildBestFitPdf(
+        fileName: fileName,
+        outputType: outputType,
+        summaryLength: summaryLength,
+        outputLanguage: outputLanguage,
+        result: result,
+        pageRangeLabel: pageRangeLabel,
       );
-
-      pdfBytes = await pdf.save();
+      pdfBytes = buildResult.bytes;
+      debugPrint('[PDF] Final page count: ${buildResult.pageCount}');
       debugPrint('[PDF] PDF bytes generated: ${pdfBytes.length} bytes');
 
       if (pdfBytes.isEmpty) {
@@ -232,6 +234,132 @@ class PdfExportService {
     }
   }
 
+  Future<_PdfBuildResult> _buildBestFitPdf({
+    required String fileName,
+    required String outputType,
+    required String summaryLength,
+    required GeneratedResult result,
+    required String pageRangeLabel,
+    required String outputLanguage,
+  }) async {
+    final targetPageCount = _getTargetPageCount(summaryLength);
+    final configs = _layoutConfigsForTarget(targetPageCount);
+    _PdfBuildResult? bestResult;
+
+    debugPrint('[PDF] Target page count: $targetPageCount');
+
+    for (final config in configs) {
+      final pdf = pw.Document();
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          textDirection: pw.TextDirection.rtl,
+          margin: pw.EdgeInsets.all(config.margin),
+          build: (context) => _buildContent(
+            fileName: fileName,
+            outputType: outputType,
+            summaryLength: summaryLength,
+            outputLanguage: outputLanguage,
+            result: result,
+            pageRangeLabel: pageRangeLabel,
+            layout: config,
+          ),
+        ),
+      );
+
+      final pageCount = pdf.document.pdfPageList.pages.length;
+      debugPrint(
+        '[PDF] Layout ${config.name}: pages=$pageCount, font=${config.summaryFontSize}, line=${config.summaryLineSpacing}, margin=${config.margin}',
+      );
+
+      final bytes = await pdf.save();
+      final buildResult = _PdfBuildResult(
+        bytes: bytes,
+        pageCount: pageCount,
+        layoutName: config.name,
+      );
+
+      if (targetPageCount == null || pageCount == targetPageCount) {
+        debugPrint('[PDF] Selected layout: ${config.name}');
+        return buildResult;
+      }
+
+      if (bestResult == null ||
+          (pageCount - targetPageCount).abs() <
+              (bestResult.pageCount - targetPageCount).abs()) {
+        bestResult = buildResult;
+      }
+    }
+
+    debugPrint('[PDF] Selected closest layout: ${bestResult!.layoutName}');
+    return bestResult;
+  }
+
+  List<_PdfLayoutConfig> _layoutConfigsForTarget(int? targetPageCount) {
+    const compact = _PdfLayoutConfig(
+      name: 'compact',
+      margin: 28,
+      infoPadding: 10,
+      sectionSpacing: 14,
+      paragraphGap: 3,
+      summaryFontSize: 9.5,
+      summaryLineSpacing: 0.9,
+      qaFontSize: 9.5,
+      qaLineSpacing: 1.0,
+    );
+    const balanced = _PdfLayoutConfig(
+      name: 'balanced',
+      margin: 40,
+      infoPadding: 16,
+      sectionSpacing: 24,
+      paragraphGap: 8,
+      summaryFontSize: 12,
+      summaryLineSpacing: 1.8,
+      qaFontSize: 10,
+      qaLineSpacing: 1.5,
+    );
+    const roomy = _PdfLayoutConfig(
+      name: 'roomy',
+      margin: 48,
+      infoPadding: 18,
+      sectionSpacing: 28,
+      paragraphGap: 12,
+      summaryFontSize: 13.5,
+      summaryLineSpacing: 2.5,
+      qaFontSize: 11,
+      qaLineSpacing: 2.0,
+    );
+    const expanded = _PdfLayoutConfig(
+      name: 'expanded',
+      margin: 56,
+      infoPadding: 20,
+      sectionSpacing: 34,
+      paragraphGap: 18,
+      summaryFontSize: 15,
+      summaryLineSpacing: 3.4,
+      qaFontSize: 12,
+      qaLineSpacing: 2.6,
+    );
+    const maximum = _PdfLayoutConfig(
+      name: 'maximum',
+      margin: 64,
+      infoPadding: 22,
+      sectionSpacing: 40,
+      paragraphGap: 26,
+      summaryFontSize: 16,
+      summaryLineSpacing: 4.6,
+      qaFontSize: 12.5,
+      qaLineSpacing: 3.2,
+    );
+
+    if (targetPageCount == null) return [balanced];
+    if (targetPageCount <= 1) return [balanced, compact];
+    if (targetPageCount <= 5) {
+      return [balanced, roomy, expanded, compact, maximum];
+    }
+    return [balanced, roomy, expanded, maximum, compact];
+  }
+
   /// Get user-friendly error message based on last error
   String getErrorMessage() {
     switch (_lastError) {
@@ -258,6 +386,7 @@ class PdfExportService {
     required GeneratedResult result,
     String pageRangeLabel = 'كل الصفحات',
     String outputLanguage = 'ar',
+    _PdfLayoutConfig layout = const _PdfLayoutConfig(),
   }) {
     final widgets = <pw.Widget>[];
 
@@ -265,7 +394,7 @@ class PdfExportService {
     widgets.add(
       pw.Container(
         width: double.infinity,
-        padding: const pw.EdgeInsets.all(16),
+        padding: pw.EdgeInsets.all(layout.infoPadding),
         decoration: pw.BoxDecoration(
           color: PdfColor.fromHex('#0F5132'),
           borderRadius: pw.BorderRadius.circular(8),
@@ -273,37 +402,33 @@ class PdfExportService {
         child: pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.center,
           children: [
-            pw.Text(
-              'خُلاصة',
-              style: pw.TextStyle(
-                font: _arabicBoldFont,
-                fontSize: 28,
-                color: PdfColors.white,
+            pw.Container(
+              padding: const pw.EdgeInsets.symmetric(
+                vertical: 10,
+                horizontal: 18,
               ),
-              textDirection: pw.TextDirection.rtl,
-            ),
-            pw.SizedBox(height: 4),
-            pw.Text(
-              'لخص ملفاتك ومستنداتك بسهولة',
-              style: pw.TextStyle(
-                font: _arabicFont,
-                fontSize: 12,
+              decoration: pw.BoxDecoration(
                 color: PdfColors.white,
+                borderRadius: pw.BorderRadius.circular(8),
               ),
-              textDirection: pw.TextDirection.rtl,
+              child: pw.Image(
+                _logoImage!,
+                width: 220,
+                fit: pw.BoxFit.contain,
+              ),
             ),
           ],
         ),
       ),
     );
 
-    widgets.add(pw.SizedBox(height: 24));
+    widgets.add(pw.SizedBox(height: layout.sectionSpacing));
 
     // File info section
     widgets.add(
       pw.Container(
         width: double.infinity,
-        padding: const pw.EdgeInsets.all(16),
+        padding: pw.EdgeInsets.all(layout.infoPadding),
         decoration: pw.BoxDecoration(
           border: pw.Border.all(color: PdfColors.grey300),
           borderRadius: pw.BorderRadius.circular(8),
@@ -327,7 +452,7 @@ class PdfExportService {
       ),
     );
 
-    widgets.add(pw.SizedBox(height: 24));
+    widgets.add(pw.SizedBox(height: layout.sectionSpacing));
 
     // Summary section - split into paragraphs for page spanning
     if (result.hasSummary) {
@@ -343,16 +468,16 @@ class PdfExportService {
               text: paragraph.trim(),
               style: pw.TextStyle(
                 font: _arabicFont,
-                fontSize: 12,
-                lineSpacing: 1.8,
+                fontSize: layout.summaryFontSize,
+                lineSpacing: layout.summaryLineSpacing,
               ),
               textAlign: pw.TextAlign.right,
             ),
           );
-          widgets.add(pw.SizedBox(height: 8));
+          widgets.add(pw.SizedBox(height: layout.paragraphGap));
         }
       }
-      widgets.add(pw.SizedBox(height: 16));
+      widgets.add(pw.SizedBox(height: layout.sectionSpacing / 1.5));
     }
 
     // Q&A section
@@ -363,7 +488,7 @@ class PdfExportService {
       for (var i = 0; i < result.questionsAndAnswers!.length; i++) {
         final qa = result.questionsAndAnswers![i];
         // Add all widgets from Q&A (allows page spanning)
-        widgets.addAll(_buildQAWidgets(i + 1, qa));
+        widgets.addAll(_buildQAWidgets(i + 1, qa, layout));
       }
     }
 
@@ -373,7 +498,7 @@ class PdfExportService {
       pw.Container(
         width: double.infinity,
         child: pw.Text(
-          'تم إنشاء هذا الملف بواسطة تطبيق خُلاصة',
+          'تم إنشاء هذا الملف بواسطة التطبيق',
           style: pw.TextStyle(
             font: _arabicFont,
             fontSize: 10,
@@ -445,7 +570,11 @@ class PdfExportService {
   }
 
   /// Build Q&A section as a list of widgets (allows page spanning)
-  List<pw.Widget> _buildQAWidgets(int index, QuestionAnswer qa) {
+  List<pw.Widget> _buildQAWidgets(
+    int index,
+    QuestionAnswer qa,
+    _PdfLayoutConfig layout,
+  ) {
     final widgets = <pw.Widget>[];
 
     // Question number badge
@@ -475,10 +604,10 @@ class PdfExportService {
     widgets.add(
       pw.Paragraph(
         text: qa.question,
-        style: pw.TextStyle(
-          font: _arabicBoldFont,
-          fontSize: 11,
-        ),
+            style: pw.TextStyle(
+              font: _arabicBoldFont,
+              fontSize: layout.qaFontSize + 1,
+            ),
         textAlign: pw.TextAlign.right,
       ),
     );
@@ -493,19 +622,19 @@ class PdfExportService {
             text: paragraph.trim(),
             style: pw.TextStyle(
               font: _arabicFont,
-              fontSize: 10,
-              lineSpacing: 1.5,
+              fontSize: layout.qaFontSize,
+              lineSpacing: layout.qaLineSpacing,
             ),
             textAlign: pw.TextAlign.right,
           ),
         );
-        widgets.add(pw.SizedBox(height: 4));
+        widgets.add(pw.SizedBox(height: layout.paragraphGap / 2));
       }
     }
 
-    widgets.add(pw.SizedBox(height: 12));
+    widgets.add(pw.SizedBox(height: layout.paragraphGap));
     widgets.add(pw.Divider(color: PdfColors.grey300));
-    widgets.add(pw.SizedBox(height: 12));
+    widgets.add(pw.SizedBox(height: layout.paragraphGap));
 
     return widgets;
   }
@@ -528,16 +657,35 @@ class PdfExportService {
 
   String _getSummaryLengthLabel(String length) {
     switch (length) {
+      case 'onePage':
       case 'short':
-        return 'قصير';
+        return 'صفحة واحدة';
+      case 'fivePages':
       case 'medium':
-        return 'متوسط';
+        return '5 صفحات';
+      case 'tenPages':
       case 'long':
-        return 'طويل';
+        return '10 صفحات';
       case 'custom':
         return 'مخصص';
       default:
         return 'متوسط';
+    }
+  }
+
+  int? _getTargetPageCount(String length) {
+    switch (length) {
+      case 'onePage':
+      case 'short':
+        return 1;
+      case 'fivePages':
+      case 'medium':
+        return 5;
+      case 'tenPages':
+      case 'long':
+        return 10;
+      default:
+        return null;
     }
   }
 
@@ -557,4 +705,40 @@ class PdfExportService {
   }
 
   String _padZero(int value) => value.toString().padLeft(2, '0');
+}
+
+class _PdfBuildResult {
+  final Uint8List bytes;
+  final int pageCount;
+  final String layoutName;
+
+  const _PdfBuildResult({
+    required this.bytes,
+    required this.pageCount,
+    required this.layoutName,
+  });
+}
+
+class _PdfLayoutConfig {
+  final String name;
+  final double margin;
+  final double infoPadding;
+  final double sectionSpacing;
+  final double paragraphGap;
+  final double summaryFontSize;
+  final double summaryLineSpacing;
+  final double qaFontSize;
+  final double qaLineSpacing;
+
+  const _PdfLayoutConfig({
+    this.name = 'balanced',
+    this.margin = 40,
+    this.infoPadding = 16,
+    this.sectionSpacing = 24,
+    this.paragraphGap = 8,
+    this.summaryFontSize = 12,
+    this.summaryLineSpacing = 1.8,
+    this.qaFontSize = 10,
+    this.qaLineSpacing = 1.5,
+  });
 }

@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import '../models/selected_file_info.dart';
 import '../services/pdf_text_service.dart';
 import '../utils/app_colors.dart';
@@ -51,10 +54,17 @@ class _UploadPdfScreenState extends State<UploadPdfScreen> {
         return;
       }
 
+      final stableFilePath = file.path == null
+          ? null
+          : await _copyPdfToAppDocuments(
+              sourcePath: file.path!,
+              fileName: file.name,
+            );
+
       // Get page count for the PDF (no text extraction yet)
       int totalPages = 0;
-      if (file.path != null) {
-        final pageCountResult = await _pdfTextService.getPageCount(file.path);
+      if (stableFilePath != null) {
+        final pageCountResult = await _pdfTextService.getPageCount(stableFilePath);
         if (pageCountResult.success) {
           totalPages = pageCountResult.pageCount;
           debugPrint('[UploadPdf] totalPages: $totalPages');
@@ -64,7 +74,7 @@ class _UploadPdfScreenState extends State<UploadPdfScreen> {
       setState(() {
         _selectedFile = SelectedFileInfo(
           fileName: file.name,
-          filePath: file.path,
+          filePath: stableFilePath,
           fileSize: file.size,
           totalPages: totalPages,
           selectedToPage: totalPages, // Default to all pages
@@ -79,6 +89,31 @@ class _UploadPdfScreenState extends State<UploadPdfScreen> {
         _showErrorSnackBar('حدث خطأ أثناء اختيار الملف');
       }
     }
+  }
+
+  Future<String> _copyPdfToAppDocuments({
+    required String sourcePath,
+    required String fileName,
+  }) async {
+    final sourceFile = File(sourcePath);
+    final docsDir = await getApplicationDocumentsDirectory();
+    final uploadsDir = Directory('${docsDir.path}/uploaded_pdfs');
+    if (!await uploadsDir.exists()) {
+      await uploadsDir.create(recursive: true);
+    }
+
+    final safeName = _safePdfFileName(fileName);
+    final savedPath =
+        '${uploadsDir.path}/${DateTime.now().millisecondsSinceEpoch}_$safeName';
+    final savedFile = await sourceFile.copy(savedPath);
+    debugPrint('[UploadPdf] stable file path: ${savedFile.path}');
+    return savedFile.path;
+  }
+
+  String _safePdfFileName(String fileName) {
+    final normalized = fileName.trim().isEmpty ? 'document.pdf' : fileName;
+    final safeName = normalized.replaceAll(RegExp(r'[^A-Za-z0-9_.-]'), '_');
+    return safeName.toLowerCase().endsWith('.pdf') ? safeName : '$safeName.pdf';
   }
 
   /// Navigate to options screen without extracting text.

@@ -82,6 +82,7 @@ class _ResultScreenState extends State<ResultScreen> {
             context: context,
             filePath: filePath,
             fileName: widget.fileInfo.fileName,
+            fileSize: widget.fileInfo.fileSize ?? 0,
             totalPages: widget.fileInfo.totalPages,
             fromPage: widget.fileInfo.actualFromPage,
             toPage: widget.fileInfo.actualToPage,
@@ -293,14 +294,12 @@ class _ResultScreenState extends State<ResultScreen> {
       1: 'questionsOnly',
       2: 'summaryAndQuestions',
     };
-    final lengthMap = {0: 'short', 1: 'medium', 2: 'long', 3: 'medium'};
-
     final success = await _pdfExportService.exportAndShare(
       context: context,
       fileName: widget.fileInfo.fileName,
       outputType:
       outputTypeMap[widget.options.outputTypeIndex] ?? 'summaryOnly',
-      summaryLength: lengthMap[widget.options.lengthIndex] ?? 'medium',
+      summaryLength: widget.options.summaryLength,
       outputLanguage: widget.options.outputLanguageCode,
       result: _result!,
       pageRangeLabel: widget.fileInfo.pageRangeLabel,
@@ -336,13 +335,7 @@ class _ResultScreenState extends State<ResultScreen> {
           elevation: 0,
           leading: IconButton(
             icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
-            onPressed: () {
-              if (_isLoading && _usesLargeDocumentFlow) {
-                _cancelLargeDocumentProcessing();
-              } else {
-                Navigator.of(context).pop();
-              }
-            },
+            onPressed: () => Navigator.of(context).pop(),
           ),
           title: Text('النتيجة', style: AppTextStyles.headlineSmall),
           centerTitle: true,
@@ -405,7 +398,7 @@ class _ResultScreenState extends State<ResultScreen> {
               if (_usesLargeDocumentFlow) ...[
                 const SizedBox(height: 12),
                 Text(
-                  'يرجى إبقاء التطبيق مفتوحًا أثناء معالجة الملفات الكبيرة.',
+                  'يمكنك الرجوع لاحقًا، وسنحاول المتابعة من آخر تقدم محفوظ.',
                   style: AppTextStyles.bodySmall.copyWith(
                     color: AppColors.textSecondary,
                   ),
@@ -414,7 +407,7 @@ class _ResultScreenState extends State<ResultScreen> {
                 const SizedBox(height: 20),
                 TextButton(
                   onPressed: _cancelLargeDocumentProcessing,
-                  child: const Text('إلغاء'),
+                  child: const Text('إيقاف المعالجة'),
                 ),
               ],
             ],
