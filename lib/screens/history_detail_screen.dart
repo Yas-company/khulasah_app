@@ -191,7 +191,6 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
     );
 
     final success = await _pdfExportService.exportAndShare(
-      context: context,
       fileName: widget.history.fileName,
       outputType: widget.history.outputType,
       summaryLength: widget.history.summaryLength,

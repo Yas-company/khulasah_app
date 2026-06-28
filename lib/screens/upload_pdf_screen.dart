@@ -12,7 +12,9 @@ import '../widgets/file_upload_box.dart';
 import 'summary_options_screen.dart';
 
 class UploadPdfScreen extends StatefulWidget {
-  const UploadPdfScreen({super.key});
+  final int? initialOutputType;
+
+  const UploadPdfScreen({super.key, this.initialOutputType});
 
   @override
   State<UploadPdfScreen> createState() => _UploadPdfScreenState();
@@ -127,7 +129,10 @@ class _UploadPdfScreenState extends State<UploadPdfScreen> {
 
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => SummaryOptionsScreen(fileInfo: _selectedFile!),
+        builder: (_) => SummaryOptionsScreen(
+          fileInfo: _selectedFile!,
+          initialOutputType: widget.initialOutputType,
+        ),
       ),
     );
   }

@@ -440,7 +440,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   onTap: () {
                     AppFeedbackService.instance.tap();
                     Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const UploadPdfScreen()),
+                      MaterialPageRoute(
+                        builder: (_) => const UploadPdfScreen(initialOutputType: 0),
+                      ),
                     );
                   },
                 ),
@@ -458,7 +460,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   onTap: () {
                     AppFeedbackService.instance.tap();
                     Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const UploadPdfScreen()),
+                      MaterialPageRoute(
+                        builder: (_) => const UploadPdfScreen(initialOutputType: 1),
+                      ),
                     );
                   },
                 ),
@@ -482,7 +486,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   onTap: () {
                     AppFeedbackService.instance.tap();
                     Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const UploadPdfScreen()),
+                      MaterialPageRoute(
+                        builder: (_) => const UploadPdfScreen(initialOutputType: 2),
+                      ),
                     );
                   },
                 ),

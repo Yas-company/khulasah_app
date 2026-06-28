@@ -17,8 +17,13 @@ import 'result_screen.dart';
 
 class SummaryOptionsScreen extends StatefulWidget {
   final SelectedFileInfo fileInfo;
+  final int? initialOutputType;
 
-  const SummaryOptionsScreen({super.key, required this.fileInfo});
+  const SummaryOptionsScreen({
+    super.key,
+    required this.fileInfo,
+    this.initialOutputType,
+  });
 
   @override
   State<SummaryOptionsScreen> createState() => _SummaryOptionsScreenState();
@@ -30,7 +35,7 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
   static const int _largePdfPageThreshold =
       LargeDocumentProcessor.largeRangeThreshold;
 
-  int _selectedOutputType = 0;
+  late int _selectedOutputType;
   int _selectedLength = 0;
   int _selectedLanguage = 0;
   bool _isProcessing = true;
@@ -79,6 +84,10 @@ class _SummaryOptionsScreenState extends State<SummaryOptionsScreen>
   @override
   void initState() {
     super.initState();
+
+    // Initialize output type from parameter or default to 0 (summary only)
+    _selectedOutputType = widget.initialOutputType ?? 0;
+
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 500),
       vsync: this,
