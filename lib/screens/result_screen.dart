@@ -295,6 +295,7 @@ class _ResultScreenState extends State<ResultScreen> {
       2: 'summaryAndQuestions',
     };
     final success = await _pdfExportService.exportAndShare(
+      context: context,
       fileName: widget.fileInfo.fileName,
       outputType:
       outputTypeMap[widget.options.outputTypeIndex] ?? 'summaryOnly',
