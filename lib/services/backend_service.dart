@@ -26,6 +26,14 @@ class BackendService {
   final FirebaseFunctionsService _firebaseService =
       FirebaseFunctionsService.instance;
 
+  /// Returns question count based on selected page range
+  int _getQuestionCount(int selectedPageCount) {
+    if (selectedPageCount <= 10) return 5;
+    if (selectedPageCount <= 25) return 10;
+    if (selectedPageCount <= 50) return 15;
+    return 20;
+  }
+
   /// Generates a result based on the selected options.
   ///
   /// This method tries backends in order:
@@ -177,6 +185,7 @@ class BackendService {
     debugPrint('[Backend] Mode: $mode');
     debugPrint('[Backend] summaryLength: $summaryLength');
     debugPrint('[Backend] targetWords: $targetWords');
+    debugPrint('[Backend] questionCount: ${_getQuestionCount(toPage - fromPage + 1)}');
 
     try {
       final response = await http
@@ -196,9 +205,10 @@ class BackendService {
               'mode': mode,
               'targetWords': targetWords,
               'targetPages': targetPages,
+              'questionCount': _getQuestionCount(toPage - fromPage + 1),
             }),
           )
-          .timeout(const Duration(seconds: 90));
+          .timeout(const Duration(seconds: 180));
 
       debugPrint('[Backend] Response status: ${response.statusCode}');
       debugPrint('[Backend] Response body length: ${response.body.length}');
@@ -240,6 +250,17 @@ class BackendService {
               break;
             default:
               resultType = GeneratedResultType.summaryOnly;
+          }
+
+          // Debug logs for parsed data
+          final summary = data['summary'] ?? '';
+          debugPrint('[Backend] Parsed questions count: ${qaList?.length ?? 0}');
+          debugPrint('[Backend] Parsed summary length: ${summary.length}');
+          if (qaList != null) {
+            for (int i = 0; i < qaList.length; i++) {
+              debugPrint('[QA][$i] Q: ${qaList[i].question}');
+              debugPrint('[QA][$i] A: ${qaList[i].answer}');
+            }
           }
 
           return GeneratedResult(
